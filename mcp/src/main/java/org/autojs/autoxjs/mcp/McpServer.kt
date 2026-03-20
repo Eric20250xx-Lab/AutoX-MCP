@@ -46,42 +46,65 @@ class McpServer(
     fun start(config: McpConfig) {
         stop()
         if (!config.enabled) return
-        engine = embeddedServer(Netty, port = config.port, host = config.host) {
-            install(WebSockets)
-            routing {
-                post("/mcp") {
-                    if (!isOriginAllowed(config, call.request.headers["Origin"])) {
-                        call.respond(
-                            HttpStatusCode.Forbidden
-                        )
-                        return@post
+        Log.i(TAG, "Starting MCP server on ${config.host}:${config.port}")
+        try {
+            engine = embeddedServer(Netty, port = config.port, host = config.host) {
+                install(WebSockets)
+                routing {
+                    post("/mcp") {
+                        try {
+                            Log.d(TAG, "Received POST /mcp request")
+                            if (!isOriginAllowed(config, call.request.headers["Origin"])) {
+                                Log.d(TAG, "Origin not allowed")
+                                call.respond(HttpStatusCode.Forbidden)
+                                return@post
+                            }
+
+                            if (!authorize(config, call.request.headers["X-Token"])) {
+                                Log.d(TAG, "Unauthorized")
+                                call.respond(HttpStatusCode.Unauthorized)
+                                return@post
+                            }
+
+                            val body = call.receiveText()
+                            Log.d(TAG, "Received body: $body")
+                            val response = jsonRpcHandler.handleText(body)
+                            Log.d(TAG, "Response status: ${response.status}, body: ${response.body}")
+                            if (response.body == null) {
+                                call.respond(response.status)
+                            } else {
+                                val jsonResponse = gson.toJson(response.body)
+                                Log.d(TAG, "Sending JSON response: $jsonResponse")
+                                call.respondText(
+                                    jsonResponse,
+                                    ContentType.Application.Json,
+                                    response.status
+                                )
+                            }
+                        } catch (e: Exception) {
+                            Log.e(TAG, "Error handling POST /mcp", e)
+                            call.respond(HttpStatusCode.InternalServerError)
+                        }
                     }
 
-                    if (!authorize(config, call.request.headers["X-Token"])) {
-                        call.respond(HttpStatusCode.Unauthorized)
-                        return@post
+                    get("/mcp") {
+                        call.respond(HttpStatusCode.MethodNotAllowed)
                     }
 
-                    val body = call.receiveText()
-                    val response = jsonRpcHandler.handleText(body)
-                    if (response.body == null) {
-                        call.respond(response.status)
-                    } else {
-                        call.respondText(
-                            gson.toJson(response.body),
-                            ContentType.Application.Json,
-                            response.status
-                        )
+                    get("/") {
+                        call.respondText("MCP Server Running", ContentType.Text.Plain)
                     }
+
                 }
-
-                get("/mcp") {
-                    call.respond(HttpStatusCode.MethodNotAllowed)
-                }
-
+            }.also { engine -> 
+                Log.i(TAG, "Engine created, starting...")
+                engine.start(wait = false)
+                Log.i(TAG, "Engine started successfully")
             }
-        }.also { engine -> engine.start(wait = false) }
-        Log.i(TAG, "MCP server started on ${config.host}:${config.port}")
+            Log.i(TAG, "MCP server started on ${config.host}:${config.port}")
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to start MCP server", e)
+        }
     }
 
     fun stop() {

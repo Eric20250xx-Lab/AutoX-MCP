@@ -76,8 +76,7 @@
         <service
             android:name="com.stardust.autojs.core.accessibility.AccessibilityService"
             android:exported="false"
-            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE"
-            android:process="@string/text_script_process_name">
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
             <intent-filter>
                 <action android:name="android.accessibilityservice.AccessibilityService" />
             </intent-filter>

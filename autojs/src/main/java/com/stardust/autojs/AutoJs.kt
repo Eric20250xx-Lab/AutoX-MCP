@@ -61,7 +61,11 @@ abstract class AutoJs protected constructor(protected val application: Applicati
     init {
         ObjectWatcher.init(application)
         ScreenMetrics.initIfNeeded(application)
-        MlKit.initialize(application)
+        try {
+            MlKit.initialize(application)
+        } catch (e: Exception) {
+            Log.w(TAG, "MlKit already initialized", e)
+        }
         ShizukuClient.instance.setupService(application.packageName, globalConsole)
         scriptEngineService = buildScriptEngineService()
         ScriptEngineService.instance = scriptEngineService
@@ -192,6 +196,7 @@ abstract class AutoJs protected constructor(protected val application: Applicati
     }
 
     companion object {
+        private const val TAG = "AutoJs"
         @SuppressLint("StaticFieldLeak")
         lateinit var instance: AutoJs
     }

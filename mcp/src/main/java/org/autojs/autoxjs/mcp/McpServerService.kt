@@ -12,12 +12,17 @@ import android.os.IBinder
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import androidx.preference.PreferenceManager
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 
 class McpServerService : Service(), SharedPreferences.OnSharedPreferenceChangeListener {
     private lateinit var prefs: SharedPreferences
     private lateinit var mcpService: McpService
     @Volatile
     private var foregroundStarted = false
+    private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     override fun onCreate() {
         super.onCreate()
@@ -58,7 +63,9 @@ class McpServerService : Service(), SharedPreferences.OnSharedPreferenceChangeLi
         val config = McpPrefs.load(this)
         if (config.enabled) {
             startForegroundIfNeeded()
-            mcpService.start(config)
+            serviceScope.launch {
+                mcpService.start(config)
+            }
         } else {
             mcpService.stop()
             stopForeground(STOP_FOREGROUND_REMOVE)
@@ -83,7 +90,7 @@ class McpServerService : Service(), SharedPreferences.OnSharedPreferenceChangeLi
             .setContentTitle(getString(R.string.mcp_notification_title))
             .setContentText(getString(R.string.mcp_notification_text))
             .setOngoing(true)
-            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
             .build()
     }
 

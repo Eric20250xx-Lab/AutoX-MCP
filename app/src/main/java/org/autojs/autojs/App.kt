@@ -83,12 +83,12 @@ class App : Application(), Configuration.Provider {
             };
         } else if (ProcessUtils.isMainProcess(this)) {
             initResource()
+            AutoJs.initInstance(this)
             mcpPreferenceBridge = McpPreferenceBridge(this).apply { start() }
             EngineController.scope.launch {
                 delay(1000)
                 ShizukuProvider.requestBinderForNonProviderProcess(this@App)
             }
-            MlKit.initialize(this)
         }
         Log.i(
             TAG, "Pid: ${Process.myPid()}, isScriptProcess: ${ProcessUtils.isScriptProcess(this)}"
