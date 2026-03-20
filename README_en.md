@@ -12,6 +12,17 @@
 [中文文档](README.md)
 ## Introduction
 
+> **Fork Note**
+>
+> This repository continues from the upstream AutoX project. While keeping the original structure and core features intact, this fork adds several adjustments focused on local development and MCP integration, including:
+>
+> - Improved MCP server startup flow and logging, with clearer error handling, status reporting, and request processing.
+> - Adjusted MCP-related Service / Manifest configuration to improve foreground service permissions and process behavior.
+> - Refined `AutoJs` initialization timing to avoid duplicate initialization issues and make main-process startup logic more explicit.
+> - Added a local `build.sh` script for development builds, along with Gradle / Ktor-related configuration updates to make fork-based development and packaging easier.
+>
+> If you plan to use this fork, please review the commit history and source changes here first to confirm that these customizations match your use case.
+
 A JavaScript runtime and development environment on the Android platform that supports barrier-free services. Its development goal is similar to JsBox and Workflow.
 
 
