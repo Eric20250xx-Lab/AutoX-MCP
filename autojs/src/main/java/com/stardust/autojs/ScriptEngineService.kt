@@ -86,7 +86,6 @@ class ScriptEngineService internal constructor(builder: ScriptEngineServiceBuild
 
     fun execute(task: ScriptExecutionTask): ScriptExecution {
         val execution = executeInternal(task)
-        mScriptExecutions[execution.id] = execution
         return execution
     }
 
@@ -117,6 +116,7 @@ class ScriptEngineService internal constructor(builder: ScriptEngineServiceBuild
     private fun executeInternal(task: ScriptExecutionTask): ScriptExecution {
         setupExecutionTaskListener(task)
         val execution = createScriptExecution(task)
+        mScriptExecutions[execution.id] = execution
         startScriptExecution(execution)
         return execution
     }

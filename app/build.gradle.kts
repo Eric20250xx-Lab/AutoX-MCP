@@ -213,7 +213,6 @@ dependencies {
     // Retrofit
     implementation(libs.retrofit2.retrofit)
     implementation(libs.retrofit2.converter.gson)
-    debugImplementation(libs.leakcanary.android)
     //Glide
     implementation(libs.glide)
     ksp(libs.glide.ksp)

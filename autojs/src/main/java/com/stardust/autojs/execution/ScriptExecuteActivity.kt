@@ -15,6 +15,7 @@ import androidx.core.view.isNotEmpty
 import androidx.lifecycle.ViewModel
 import com.aiselp.autox.utils.loadScriptExecute
 import com.aiselp.autox.utils.saveScriptExecute
+import com.aiselp.autox.utils.setupStartIntent
 import com.stardust.autojs.ScriptEngineService
 import com.stardust.autojs.annotation.ScriptInterface
 import com.stardust.autojs.core.eventloop.EventEmitter
@@ -214,6 +215,7 @@ class ScriptExecuteActivity : AppCompatActivity() {
                 .putExtra(EXTRA_EXECUTION_ID, execution.id)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 .addFlags(execution.config.intentFlags)
+            setupStartIntent(i, execution.source, execution.config)
             context.startActivity(i)
         }
     }
