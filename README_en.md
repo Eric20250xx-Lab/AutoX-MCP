@@ -1,16 +1,16 @@
 # AutoX MCP
 <p align="center"> 
   
-![GitHub Issues or Pull Requests](https://img.shields.io/github/issues/Eric20250xx/AutoX-MCP)
-![GitHub Actions Workflow Status](https://img.shields.io/github/actions/workflow/status/Eric20250xx/AutoX-MCP/android-test.yml)
-![GitHub Release](https://img.shields.io/github/v/release/Eric20250xx/AutoX-MCP)
+![GitHub Issues or Pull Requests](https://img.shields.io/github/issues/Eric20250xx-Lab/AutoX-MCP)
+![GitHub Actions Workflow Status](https://img.shields.io/github/actions/workflow/status/Eric20250xx-Lab/AutoX-MCP/android-test.yml)
+![GitHub Release](https://img.shields.io/github/v/release/Eric20250xx-Lab/AutoX-MCP)
 
 </p>
 
 [中文文档](README.md)
 ## Introduction
 
-This is an independently maintained community fork by `Eric20250xx`, focused on reliable MCP-based remote control, job lifecycle management, and real-device operation for AutoX.js. It is not an official AutoX.js release and does not represent the upstream maintainers.
+This is a community fork maintained by [`Eric20250xx-Lab`](https://github.com/Eric20250xx-Lab), focused on reliable MCP-based remote control, job lifecycle management, and real-device operation for AutoX.js. It is not an official AutoX.js release and does not represent the upstream maintainers.
 
 - Upstream: the `setup-v7` branch of [`eness-1/AutoX`](https://github.com/eness-1/AutoX).
 - Development model: preserve the full Git history and licenses, develop and validate changes here, and selectively synchronize upstream updates.

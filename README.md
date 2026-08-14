@@ -1,9 +1,9 @@
 # AutoX MCP
 <p align="center"> 
   
-![GitHub Issues or Pull Requests](https://img.shields.io/github/issues/Eric20250xx/AutoX-MCP)
-![GitHub Actions Workflow Status](https://img.shields.io/github/actions/workflow/status/Eric20250xx/AutoX-MCP/android-test.yml)
-![GitHub Release](https://img.shields.io/github/v/release/Eric20250xx/AutoX-MCP)
+![GitHub Issues or Pull Requests](https://img.shields.io/github/issues/Eric20250xx-Lab/AutoX-MCP)
+![GitHub Actions Workflow Status](https://img.shields.io/github/actions/workflow/status/Eric20250xx-Lab/AutoX-MCP/android-test.yml)
+![GitHub Release](https://img.shields.io/github/v/release/Eric20250xx-Lab/AutoX-MCP)
 
 </p>
 
@@ -11,7 +11,7 @@
 
 ## 简介
 
-这是由 `Eric20250xx` 独立维护的社区 fork，重点改进 AutoX.js 的 MCP 远程控制、任务生命周期和真机运行稳定性。它不是 AutoX.js 官方版本，也不代表上游维护者。
+这是由 [`Eric20250xx-Lab`](https://github.com/Eric20250xx-Lab) 维护的社区 fork，重点改进 AutoX.js 的 MCP 远程控制、任务生命周期和真机运行稳定性。它不是 AutoX.js 官方版本，也不代表上游维护者。
 
 - 上游来源：[`eness-1/AutoX`](https://github.com/eness-1/AutoX) 的 `setup-v7` 分支。
 - 开发方式：保留完整 Git 历史和许可证，在本仓库独立开发、验证与发布，并按需同步上游更新。
