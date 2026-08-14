@@ -220,13 +220,15 @@ class ScreenshotTool(private val ctx: McpToolContext) : McpTool {
     override suspend fun handle(params: JsonObject?): McpResponse {
         val req = parse(params, ScreenshotRequest::class.java) ?: ScreenshotRequest()
         val runtime = ctx.runtimeProvider.getRuntime()
+        var image: ImageWrapper? = null
         return try {
-            val image = captureImage(runtime)
-            val file = saveImage(ctx.appContext, image)
+            val captured = captureImage(runtime)
+            image = captured
+            val file = saveImage(ctx.appContext, captured)
             val info = ScreenshotInfo(
                 path = file.absolutePath,
-                width = image.width,
-                height = image.height,
+                width = captured.width,
+                height = captured.height,
                 timestamp = System.currentTimeMillis()
             )
             ctx.screenshotStore.update(info)
@@ -239,7 +241,7 @@ class ScreenshotTool(private val ctx: McpToolContext) : McpTool {
                     "width" to info.width,
                     "height" to info.height,
                     "timestamp" to info.timestamp,
-                    "base64" to imageToBase64(image)
+                    "base64" to imageToBase64(captured)
                 )
             } else {
                 mapOf(
@@ -249,10 +251,11 @@ class ScreenshotTool(private val ctx: McpToolContext) : McpTool {
                     "timestamp" to info.timestamp
                 )
             }
-            image.recycle()
             McpResponse.ok(data)
         } catch (e: Exception) {
             McpResponse.error("Failed", e.message ?: "screenshot failed")
+        } finally {
+            image?.recycle()
         }
     }
 }

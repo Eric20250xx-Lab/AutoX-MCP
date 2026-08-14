@@ -11,9 +11,9 @@ import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
-import androidx.preference.PreferenceManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 
@@ -22,7 +22,11 @@ class McpServerService : Service(), SharedPreferences.OnSharedPreferenceChangeLi
     private lateinit var mcpService: McpService
     @Volatile
     private var foregroundStarted = false
-    private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val serviceJob = SupervisorJob()
+    private val serviceScope = CoroutineScope(serviceJob + Dispatchers.IO)
+    private var applyJob: Job? = null
+    @Volatile
+    private var destroying = false
 
     override fun onCreate() {
         super.onCreate()
@@ -34,7 +38,6 @@ class McpServerService : Service(), SharedPreferences.OnSharedPreferenceChangeLi
         )
         prefs.registerOnSharedPreferenceChangeListener(this)
         mcpService = McpService(this)
-        applyConfig()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -44,7 +47,10 @@ class McpServerService : Service(), SharedPreferences.OnSharedPreferenceChangeLi
     }
 
     override fun onDestroy() {
+        destroying = true
         prefs.unregisterOnSharedPreferenceChangeListener(this)
+        applyJob?.cancel()
+        serviceJob.cancel()
         mcpService.stop()
         stopForeground(STOP_FOREGROUND_REMOVE)
         foregroundStarted = false
@@ -54,19 +60,24 @@ class McpServerService : Service(), SharedPreferences.OnSharedPreferenceChangeLi
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onSharedPreferenceChanged(sharedPreferences: SharedPreferences?, key: String?) {
-        if (key in MCP_KEYS) {
+        if (key in MCP_CONFIG_KEYS) {
             applyConfig()
         }
     }
 
     private fun applyConfig() {
+        if (destroying) {
+            return
+        }
         val config = McpPrefs.load(this)
         if (config.enabled) {
             startForegroundIfNeeded()
-            serviceScope.launch {
+            applyJob?.cancel()
+            applyJob = serviceScope.launch {
                 mcpService.start(config)
             }
         } else {
+            applyJob?.cancel()
             mcpService.stop()
             stopForeground(STOP_FOREGROUND_REMOVE)
             foregroundStarted = false
@@ -113,8 +124,7 @@ class McpServerService : Service(), SharedPreferences.OnSharedPreferenceChangeLi
         private const val CHANNEL_ID = "mcp_server"
         private const val NOTIFICATION_ID = 27190
 
-        private val MCP_KEYS = setOf(
-            McpPrefKeys.KEY_ENABLED,
+        private val MCP_CONFIG_KEYS = setOf(
             McpPrefKeys.KEY_HOST,
             McpPrefKeys.KEY_PORT,
             McpPrefKeys.KEY_TOKEN,

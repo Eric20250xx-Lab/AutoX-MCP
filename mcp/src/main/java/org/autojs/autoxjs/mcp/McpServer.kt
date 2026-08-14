@@ -41,14 +41,16 @@ class McpServer(
     )
 
     val isRunning: Boolean
-        get() = engine?.application?.environment?.monitor != null
+        @Synchronized get() = engine != null
 
-    fun start(config: McpConfig) {
+    @Synchronized
+    fun start(config: McpConfig): Boolean {
         stop()
-        if (!config.enabled) return
+        if (!config.enabled) return false
         Log.i(TAG, "Starting MCP server on ${config.host}:${config.port}")
+        var candidate: ApplicationEngine? = null
         try {
-            engine = embeddedServer(Netty, port = config.port, host = config.host) {
+            val newEngine = embeddedServer(Netty, port = config.port, host = config.host) {
                 install(WebSockets)
                 routing {
                     post("/mcp") {
@@ -94,19 +96,28 @@ class McpServer(
                     get("/") {
                         call.respondText("MCP Server Running", ContentType.Text.Plain)
                     }
-
                 }
-            }.also { engine -> 
-                Log.i(TAG, "Engine created, starting...")
-                engine.start(wait = false)
-                Log.i(TAG, "Engine started successfully")
             }
+            candidate = newEngine
+            Log.i(TAG, "Engine created, starting...")
+            newEngine.start(wait = false)
+            engine = newEngine
+            Log.i(TAG, "Engine started successfully")
             Log.i(TAG, "MCP server started on ${config.host}:${config.port}")
+            return true
         } catch (e: Exception) {
             Log.e(TAG, "Failed to start MCP server", e)
+            try {
+                candidate?.stop(0, 1000)
+            } catch (stopError: Exception) {
+                Log.w(TAG, "Failed to clean up MCP server after start failure", stopError)
+            }
+            engine = null
+            return false
         }
     }
 
+    @Synchronized
     fun stop() {
         try {
             engine?.stop(1000, 2000)

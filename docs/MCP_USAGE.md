@@ -262,6 +262,7 @@ curl -X POST http://127.0.0.1:27190/mcp \
 - 工具调用日志：Logcat 过滤 `McpToolCall`（服务运行在 `:script` 进程）。
 - `get_recent_screenshot` 在无历史截图时会自动抓取一张。
 - Base64 截图默认会缩放到最长边 720px，并使用 JPEG 质量 70 以降低体积。
+- Android 11 及以上版本会把无障碍截图的硬件缓冲区复制为普通位图，并在 5 秒无回调时返回错误。若目标 App 使用安全窗口保护内容，Android 会拒绝截图；MCP 会返回明确错误，但不会绕过系统保护。
 - `save_script` 会写入 AutoJs 当前脚本目录（对应应用设置里的“脚本路径”）。
 - `list_samples` / `read_sample` 读取 AutoJs 内置示例资源（assets/sample）。
 - `read_script` / `update_script` / `delete_script` / `rename_script` 仅操作脚本目录内文件（按相对路径解析）。

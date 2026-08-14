@@ -51,26 +51,41 @@ class McpService(private val context: Context) {
         screenshotStore = screenshotStore
     ) { currentConfig }
     private var server: McpServer? = null
+    private var activeConfig: McpConfig? = null
 
     init {
         registerDefaultTools()
     }
 
-    fun start(config: McpConfig) {
+    @Synchronized
+    fun start(config: McpConfig): Boolean {
         currentConfig = config
         if (!config.enabled) {
             stop()
-            return
+            return false
         }
         if (server == null) {
             server = McpServer(context.applicationContext, registry)
         }
-        server?.start(config)
-        Log.i(TAG, "MCP service started")
+        if (activeConfig == config && server?.isRunning == true) {
+            return true
+        }
+        val started = server?.start(config) == true
+        if (started) {
+            activeConfig = config
+            Log.i(TAG, "MCP service started")
+        } else {
+            activeConfig = null
+            Log.e(TAG, "MCP service failed to start")
+        }
+        return started
     }
 
+    @Synchronized
     fun stop() {
         server?.stop()
+        server = null
+        activeConfig = null
         runtimeProvider.close()
         Log.i(TAG, "MCP service stopped")
     }

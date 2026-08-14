@@ -22,12 +22,38 @@ import com.stardust.util.DeveloperUtils
 import com.stardust.util.ScreenMetrics
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.asExecutor
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 
 /**
  * Created by Stardust on 2017/4/2.
  */
+
+private const val SCREENSHOT_COPY_FAILED = -1
+private const val SCREENSHOT_TIMEOUT = -2
+private const val SCREENSHOT_TIMEOUT_MILLIS = 5_000L
+
+private fun screenshotErrorMessage(errorCode: Int): String = when (errorCode) {
+    AccessibilityService.ERROR_TAKE_SCREENSHOT_INTERNAL_ERROR ->
+        "Screenshot failed because Android reported an internal error"
+    AccessibilityService.ERROR_TAKE_SCREENSHOT_INTERVAL_TIME_SHORT ->
+        "Screenshot requested too soon after the previous capture"
+    AccessibilityService.ERROR_TAKE_SCREENSHOT_INVALID_DISPLAY ->
+        "Screenshot failed because the display is invalid"
+    AccessibilityService.ERROR_TAKE_SCREENSHOT_INVALID_WINDOW ->
+        "Screenshot failed because the active window is invalid"
+    AccessibilityService.ERROR_TAKE_SCREENSHOT_NO_ACCESSIBILITY_ACCESS ->
+        "Screenshot failed because accessibility access is unavailable"
+    AccessibilityService.ERROR_TAKE_SCREENSHOT_SECURE_WINDOW ->
+        "Screenshot blocked by a secure window; Android does not expose protected app content"
+    SCREENSHOT_COPY_FAILED ->
+        "Screenshot failed while copying the Android hardware buffer"
+    SCREENSHOT_TIMEOUT ->
+        "Screenshot timed out while waiting for Android"
+    else -> "Screenshot failed with Android error code $errorCode"
+}
 
 class SimpleActionAutomator(
     private val mAccessibilityBridge: AccessibilityBridge,
@@ -51,10 +77,22 @@ class SimpleActionAutomator(
             Dispatchers.Default.asExecutor(),
             object : AccessibilityService.TakeScreenshotCallback {
                 override fun onSuccess(screenshot: AccessibilityService.ScreenshotResult) {
-                    val bitmap =
-                        Bitmap.wrapHardwareBuffer(screenshot.hardwareBuffer, screenshot.colorSpace)
-                    val imageWrapper = ImageWrapper.ofBitmap(bitmap)
-                    callback?.invoke(imageWrapper, 0)
+                    val hardwareBuffer = screenshot.hardwareBuffer
+                    var hardwareBitmap: Bitmap? = null
+                    try {
+                        hardwareBitmap = Bitmap.wrapHardwareBuffer(hardwareBuffer, screenshot.colorSpace)
+                        val softwareBitmap = hardwareBitmap?.copy(Bitmap.Config.ARGB_8888, false)
+                        if (softwareBitmap == null) {
+                            callback?.invoke(null, SCREENSHOT_COPY_FAILED)
+                        } else {
+                            callback?.invoke(ImageWrapper.ofBitmap(softwareBitmap), 0)
+                        }
+                    } catch (_: Exception) {
+                        callback?.invoke(null, SCREENSHOT_COPY_FAILED)
+                    } finally {
+                        hardwareBitmap?.recycle()
+                        hardwareBuffer.close()
+                    }
                 }
 
                 override fun onFailure(errorCode: Int) {
@@ -71,11 +109,21 @@ class SimpleActionAutomator(
             if (imageWrapper != null) {
                 deferred.complete(imageWrapper)
             } else {
-                deferred.completeExceptionally(Error("takeScreenshot failed, errCode: $errCode"))
+                deferred.completeExceptionally(ScreenshotCaptureException(errCode))
             }
         }
-        deferred.await()
+        try {
+            withTimeout(SCREENSHOT_TIMEOUT_MILLIS) {
+                deferred.await()
+            }
+        } catch (_: TimeoutCancellationException) {
+            throw ScreenshotCaptureException(SCREENSHOT_TIMEOUT)
+        }
     }
+
+    class ScreenshotCaptureException(val errorCode: Int) : Exception(
+        screenshotErrorMessage(errorCode)
+    )
 
     @ScriptInterface
     fun text(text: String, i: Int): ActionTarget {
