@@ -1,11 +1,9 @@
-# Autox.js v7
+# AutoX MCP
 <p align="center"> 
   
-![GitHub Downloads (all assets, all releases)](https://img.shields.io/github/downloads/aiselp/AutoX/total)
-![GitHub Issues or Pull Requests](https://img.shields.io/github/issues/aiselp/AutoX)
-![GitHub Actions Workflow Status](https://img.shields.io/github/actions/workflow/status/aiselp/AutoX/android-test.yml)
-![GitHub Release](https://img.shields.io/github/v/release/aiselp/AutoX)
-[![Codacy Badge](https://app.codacy.com/project/badge/Grade/ca72518c8bd548f9a350d5a15e2ed9ea)](https://app.codacy.com/gh/aiselp/AutoX/dashboard?utm_source=gh&utm_medium=referral&utm_content=&utm_campaign=Badge_grade)
+![GitHub Issues or Pull Requests](https://img.shields.io/github/issues/Eric20250xx/AutoX-MCP)
+![GitHub Actions Workflow Status](https://img.shields.io/github/actions/workflow/status/Eric20250xx/AutoX-MCP/android-test.yml)
+![GitHub Release](https://img.shields.io/github/v/release/Eric20250xx/AutoX-MCP)
 
 </p>
 
@@ -13,9 +11,17 @@
 
 ## 简介
 
+这是由 `Eric20250xx` 独立维护的社区 fork，重点改进 AutoX.js 的 MCP 远程控制、任务生命周期和真机运行稳定性。它不是 AutoX.js 官方版本，也不代表上游维护者。
+
+- 上游来源：[`eness-1/AutoX`](https://github.com/eness-1/AutoX) 的 `setup-v7` 分支。
+- 开发方式：保留完整 Git 历史和许可证，在本仓库独立开发、验证与发布，并按需同步上游更新。
+- 当前重点：让 `run_script`、`cancel_job`、状态查询和 MCP 服务启停在真实 Android 设备上可预测、可验证。
+
+## 上游 Fork 说明
+
 > **Fork 说明**
 >
-> 本仓库基于上游 AutoX 项目继续维护，当前 fork 在保留原有功能和结构的基础上，补充了一些面向本地开发与 MCP 集成的调整，主要包括：
+> `eness-1/AutoX` 基于 AutoX 项目继续维护，在保留原有功能和结构的基础上，补充了一些面向本地开发与 MCP 集成的调整，主要包括：
 >
 > - 优化 MCP 服务启动流程与日志输出，补充错误捕获、状态提示和更清晰的请求处理逻辑。
 > - 调整 MCP 相关 Service / Manifest 配置，改进前台服务权限与进程行为，提升运行稳定性。

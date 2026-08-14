@@ -1,20 +1,26 @@
-# AutoX.js v7
+# AutoX MCP
 <p align="center"> 
   
-![GitHub Downloads (all assets, all releases)](https://img.shields.io/github/downloads/aiselp/AutoX/total)
-![GitHub Issues or Pull Requests](https://img.shields.io/github/issues/aiselp/AutoX)
-![GitHub Actions Workflow Status](https://img.shields.io/github/actions/workflow/status/aiselp/AutoX/android-test.yml)
-![GitHub Release](https://img.shields.io/github/v/release/aiselp/AutoX)
-[![Codacy Badge](https://app.codacy.com/project/badge/Grade/ca72518c8bd548f9a350d5a15e2ed9ea)](https://app.codacy.com/gh/aiselp/AutoX/dashboard?utm_source=gh&utm_medium=referral&utm_content=&utm_campaign=Badge_grade)
+![GitHub Issues or Pull Requests](https://img.shields.io/github/issues/Eric20250xx/AutoX-MCP)
+![GitHub Actions Workflow Status](https://img.shields.io/github/actions/workflow/status/Eric20250xx/AutoX-MCP/android-test.yml)
+![GitHub Release](https://img.shields.io/github/v/release/Eric20250xx/AutoX-MCP)
 
 </p>
 
 [中文文档](README.md)
 ## Introduction
 
+This is an independently maintained community fork by `Eric20250xx`, focused on reliable MCP-based remote control, job lifecycle management, and real-device operation for AutoX.js. It is not an official AutoX.js release and does not represent the upstream maintainers.
+
+- Upstream: the `setup-v7` branch of [`eness-1/AutoX`](https://github.com/eness-1/AutoX).
+- Development model: preserve the full Git history and licenses, develop and validate changes here, and selectively synchronize upstream updates.
+- Current focus: predictable and verifiable `run_script`, `cancel_job`, status queries, and MCP service lifecycle behavior on real Android devices.
+
+## Upstream Fork Note
+
 > **Fork Note**
 >
-> This repository continues from the upstream AutoX project. While keeping the original structure and core features intact, this fork adds several adjustments focused on local development and MCP integration, including:
+> `eness-1/AutoX` continues from the upstream AutoX project. While keeping the original structure and core features intact, that fork adds several adjustments focused on local development and MCP integration, including:
 >
 > - Improved MCP server startup flow and logging, with clearer error handling, status reporting, and request processing.
 > - Adjusted MCP-related Service / Manifest configuration to improve foreground service permissions and process behavior.
