@@ -26,6 +26,8 @@ import kotlinx.coroutines.launch
 import org.autojs.autojs.autojs.AutoJs
 import org.autojs.autojs.autojs.key.GlobalKeyObserver
 import org.autojs.autojs.external.receiver.DynamicBroadcastReceivers
+import org.autojs.autojs.guardian.ScriptGuardianExecutionGuard
+import org.autojs.autojs.guardian.ScriptGuardianPreferenceBridge
 import org.autojs.autojs.theme.ThemeColorManagerCompat
 import org.autojs.autojs.timing.TimedTaskManager
 import org.autojs.autojs.timing.TimedTaskScheduler
@@ -44,6 +46,7 @@ class App : Application(), Configuration.Provider {
     lateinit var dynamicBroadcastReceivers: DynamicBroadcastReceivers
         private set
     private var mcpPreferenceBridge: McpPreferenceBridge? = null
+    private var scriptGuardianPreferenceBridge: ScriptGuardianPreferenceBridge? = null
 
 
     override fun onCreate() {
@@ -73,6 +76,7 @@ class App : Application(), Configuration.Provider {
         )
         if (ProcessUtils.isScriptProcess(this)) {
             AutoJs.initInstance(this)
+            ScriptGuardianExecutionGuard.install(this)
             if (Pref.isRunningVolumeControlEnabled()) {
                 GlobalKeyObserver.init()
             }
@@ -84,7 +88,9 @@ class App : Application(), Configuration.Provider {
         } else if (ProcessUtils.isMainProcess(this)) {
             initResource()
             AutoJs.initInstance(this)
+            ScriptGuardianExecutionGuard.install(this)
             mcpPreferenceBridge = McpPreferenceBridge(this).apply { start() }
+            scriptGuardianPreferenceBridge = ScriptGuardianPreferenceBridge(this).apply { start() }
             EngineController.scope.launch {
                 delay(1000)
                 ShizukuProvider.requestBinderForNonProviderProcess(this@App)

@@ -1,7 +1,10 @@
 package com.stardust.autojs.servicecomponents
 
+import android.util.Log
 import com.aiselp.autox.engine.NodeScriptEngine
 import com.stardust.autojs.AutoJs
+import com.stardust.autojs.ScriptExecutionRejectedException
+import com.stardust.autojs.engine.ScriptEngine
 import com.stardust.autojs.execution.ExecutionConfig
 import com.stardust.autojs.execution.ScriptExecution
 import com.stardust.autojs.project.ProjectConfig
@@ -16,7 +19,9 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import java.io.File
 import java.util.concurrent.CopyOnWriteArraySet
 
@@ -65,6 +70,9 @@ object EngineController {
                 source, listener?.toScriptExecutionListener(),
                 ExecutionConfig(workingDirectory = taskInfo.workerDirectory)
             )
+        } catch (e: ScriptExecutionRejectedException) {
+            Log.i(TAG, "Rejected guarded script: ${taskInfo.sourcePath}")
+            listener?.onException(taskInfo, e)
         } catch (e: Throwable) {
             serviceConnection.runScript(taskInfo, listener, config)
         }
@@ -120,6 +128,41 @@ object EngineController {
         )
     }
 
+    /** Stops only the engine owned by [execution] and waits for its destruction. */
+    suspend fun stopTrackedScriptAndAwait(
+        execution: ScriptExecution,
+        timeoutMillis: Long = 5_000L
+    ): Boolean = withTimeoutOrNull(timeoutMillis) {
+        val engine = awaitTrackedScriptEngine(execution)
+        if (!engine.isDestroyed) {
+            engine.forceStop()
+        }
+        awaitScriptEngineStopped(engine)
+        true
+    } ?: false
+
+    /** Waits until the engine owned by [execution] is available and destroyed. */
+    suspend fun awaitTrackedScriptStopped(
+        execution: ScriptExecution,
+        timeoutMillis: Long = 5_000L
+    ): Boolean = withTimeoutOrNull(timeoutMillis) {
+        awaitScriptEngineStopped(awaitTrackedScriptEngine(execution))
+        true
+    } ?: false
+
+    private suspend fun awaitTrackedScriptEngine(execution: ScriptExecution): ScriptEngine<*> {
+        while (true) {
+            execution.engine?.let { return it }
+            delay(TRACKED_SCRIPT_POLL_INTERVAL_MILLIS)
+        }
+    }
+
+    private suspend fun awaitScriptEngineStopped(engine: ScriptEngine<*>) {
+        while (!engine.isDestroyed) {
+            delay(TRACKED_SCRIPT_POLL_INTERVAL_MILLIS)
+        }
+    }
+
     fun getAllScriptTasks(): Deferred<MutableList<TaskInfo>> = scope.async {
         return@async serviceConnection.getAllScriptTasks()
     }
@@ -155,4 +198,5 @@ object EngineController {
         globalScriptListener.remove(listener)
 
     private val TAG = "EngineController"
+    private const val TRACKED_SCRIPT_POLL_INTERVAL_MILLIS = 25L
 }

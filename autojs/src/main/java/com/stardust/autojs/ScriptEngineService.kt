@@ -23,6 +23,8 @@ import com.stardust.lang.ThreadCompat
 import com.stardust.util.UiHandler
 import io.reactivex.rxjava3.subjects.PublishSubject
 
+class ScriptExecutionRejectedException(message: String) : IllegalStateException(message)
+
 /**
  * Created by Stardust on 2017/1/23.
  */
@@ -40,6 +42,8 @@ class ScriptEngineService internal constructor(builder: ScriptEngineServiceBuild
         }
     private val mScriptExecutionObserver = ScriptExecutionObserver()
     private val mScriptExecutions = LinkedHashMap<Int, ScriptExecution>()
+    @Volatile
+    private var scriptExecutionGuard: ((ScriptSource) -> Boolean)? = null
     private val disposable = executionEventPublish.subscribe { event ->
         if (event.code == ScriptExecutionEvent.ON_START) {
             globalConsole.verbose(mContext.getString(R.string.text_start_running) + "[" + event.message + "]")
@@ -112,8 +116,18 @@ class ScriptEngineService internal constructor(builder: ScriptEngineServiceBuild
         }
     }
 
+    /** Installs a process-local guard that can reject a script before an execution is created. */
+    fun setScriptExecutionGuard(guard: ((ScriptSource) -> Boolean)?) {
+        scriptExecutionGuard = guard
+    }
+
     //脚本启动入口
     private fun executeInternal(task: ScriptExecutionTask): ScriptExecution {
+        if (scriptExecutionGuard?.invoke(task.source) == false) {
+            throw ScriptExecutionRejectedException(
+                "Script execution is managed by Script Guardian"
+            )
+        }
         setupExecutionTaskListener(task)
         val execution = createScriptExecution(task)
         mScriptExecutions[execution.id] = execution

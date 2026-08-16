@@ -22,6 +22,7 @@
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" /> <!-- 非auto_js运行必需，不会主动申请，某些脚本可以自行申请 -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.ACCEPT_HANDOVER" />
     <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" />
 
@@ -181,6 +182,16 @@
             android:theme="@style/IssueReporterTheme" />
 
         <activity android:name="org.autojs.autojs.external.tasker.TaskPrefEditActivity" />
+
+        <service
+            android:name="org.autojs.autojs.guardian.ScriptGuardianService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse"
+            android:process="@string/text_script_process_name">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Keeps one user-configured AutoX automation script running" />
+        </service>
 
         <activity-alias
             android:name=".external.tasker.PluginActivity"

@@ -10,6 +10,7 @@ import com.stardust.autojs.execution.ExecutionConfig
 import io.reactivex.android.schedulers.AndroidSchedulers
 import io.reactivex.schedulers.Schedulers
 import org.autojs.autojs.autojs.AutoJs
+import org.autojs.autojs.guardian.ScriptGuardianService
 import org.autojs.autojs.model.script.ScriptFile
 import org.autojs.autojs.timing.IntentTask
 import org.autojs.autojs.timing.TimedTaskManager.getIntentTaskOfAction
@@ -19,6 +20,9 @@ open class BaseBroadcastReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         Log.d(LOG_TAG, "onReceive: intent = $intent, this = $this")
         try {
+            if (intent.action in SCRIPT_GUARDIAN_RESTORE_ACTIONS) {
+                ScriptGuardianService.restore(context)
+            }
             getIntentTaskOfAction(intent.action)
                 .subscribeOn(Schedulers.io())
                 .observeOn(AndroidSchedulers.mainThread())
@@ -34,6 +38,9 @@ open class BaseBroadcastReceiver : BroadcastReceiver() {
 
     companion object {
         private const val LOG_TAG = "BaseBroadcastReceiver"
+        private val SCRIPT_GUARDIAN_RESTORE_ACTIONS = setOf(
+            Intent.ACTION_BOOT_COMPLETED
+        )
 
         fun runTask(context: Context, intent: Intent, task: IntentTask) {
             Log.d(
