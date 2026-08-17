@@ -61,6 +61,24 @@ class ScriptGuardianSupervisorTest {
     }
 
     @Test
+    fun preEngineFailureAfterStartReturnsRestartsOnce() = runBlocking {
+        supervisor.reconcile(A)
+        yield()
+
+        runner.starts.single().onFinished(IllegalStateException("engine creation failed"))
+        yield()
+
+        assertEquals(1, runner.startAttempts)
+        assertTrue(waits.hasPending(5_000L))
+
+        waits.release(5_000L)
+        yield()
+
+        assertEquals(2, runner.startAttempts)
+        assertEquals(listOf(A, A), runner.startedFiles)
+    }
+
+    @Test
     fun latestPathWinsWhileOldExecutionStops() = runBlocking {
         supervisor.reconcile(A)
         val stopGate = CompletableDeferred<Boolean>()

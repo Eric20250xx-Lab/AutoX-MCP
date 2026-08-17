@@ -36,12 +36,12 @@ class ScriptEngineService internal constructor(builder: ScriptEngineServiceBuild
     private val mEngineLifecycleObserver: EngineLifecycleObserver =
         object : EngineLifecycleObserver() {
             override fun onEngineRemove(engine: ScriptEngine<*>?) {
-                mScriptExecutions.remove(engine!!.id)
+                removeScriptExecution(engine!!.id)
                 super.onEngineRemove(engine)
             }
         }
     private val mScriptExecutionObserver = ScriptExecutionObserver()
-    private val mScriptExecutions = LinkedHashMap<Int, ScriptExecution>()
+    private val mScriptExecutions = ScriptExecutionRegistry()
     @Volatile
     private var scriptExecutionGuard: ((ScriptSource) -> Boolean)? = null
     private val disposable = executionEventPublish.subscribe { event ->
@@ -110,7 +110,7 @@ class ScriptEngineService internal constructor(builder: ScriptEngineServiceBuild
 
     fun startScriptExecution(scriptExecution: ScriptExecution) {
         if (scriptExecution is RunnableScriptExecution) {
-            ThreadCompat(scriptExecution).start()
+            ThreadCompat { runTrackedScriptExecution(scriptExecution, mScriptExecutions) }.start()
         } else if (scriptExecution is ScriptExecuteActivity.ActivityScriptExecution) {
             ScriptExecuteActivity.start(mContext, scriptExecution)
         }
@@ -130,7 +130,7 @@ class ScriptEngineService internal constructor(builder: ScriptEngineServiceBuild
         }
         setupExecutionTaskListener(task)
         val execution = createScriptExecution(task)
-        mScriptExecutions[execution.id] = execution
+        mScriptExecutions.register(execution)
         startScriptExecution(execution)
         return execution
     }
@@ -164,12 +164,14 @@ class ScriptEngineService internal constructor(builder: ScriptEngineServiceBuild
     val engines: Set<ScriptEngine<*>>
         get() = mScriptEngineManager.engines
     val scriptExecutions: Collection<ScriptExecution>
-        get() = mScriptExecutions.values
+        get() = mScriptExecutions.snapshot()
 
     fun getScriptExecution(id: Int): ScriptExecution? {
-        return if (id == ScriptExecution.NO_ID) {
-            null
-        } else mScriptExecutions[id]
+        return mScriptExecutions.get(id)
+    }
+
+    private fun removeScriptExecution(id: Int) {
+        mScriptExecutions.remove(id)
     }
 
     private open class EngineLifecycleObserver : EngineLifecycleCallback {
@@ -271,5 +273,45 @@ class ScriptEngineService internal constructor(builder: ScriptEngineServiceBuild
                 check(sInstance == null)
                 sInstance = service
             }
+    }
+}
+
+internal class ScriptExecutionRegistry {
+    private val executions = LinkedHashMap<Int, ScriptExecution>()
+
+    @Synchronized
+    fun register(execution: ScriptExecution) {
+        executions[execution.id] = execution
+    }
+
+    @Synchronized
+    fun get(id: Int): ScriptExecution? {
+        return if (id == ScriptExecution.NO_ID) null else executions[id]
+    }
+
+    @Synchronized
+    fun remove(id: Int) {
+        executions.remove(id)
+    }
+
+    @Synchronized
+    fun remove(execution: ScriptExecution) {
+        if (executions[execution.id] === execution) {
+            executions.remove(execution.id)
+        }
+    }
+
+    @Synchronized
+    fun snapshot(): List<ScriptExecution> = executions.values.toList()
+}
+
+internal fun runTrackedScriptExecution(
+    execution: RunnableScriptExecution,
+    registry: ScriptExecutionRegistry
+) {
+    try {
+        execution.run()
+    } finally {
+        registry.remove(execution)
     }
 }

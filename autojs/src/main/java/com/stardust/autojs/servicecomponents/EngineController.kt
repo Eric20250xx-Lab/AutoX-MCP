@@ -128,40 +128,29 @@ object EngineController {
         )
     }
 
-    /** Stops only the engine owned by [execution] and waits for its destruction. */
+    /** Stops only [execution]'s engine, or succeeds once it exits before creating one. */
     suspend fun stopTrackedScriptAndAwait(
         execution: ScriptExecution,
         timeoutMillis: Long = 5_000L
-    ): Boolean = withTimeoutOrNull(timeoutMillis) {
-        val engine = awaitTrackedScriptEngine(execution)
-        if (!engine.isDestroyed) {
-            engine.forceStop()
-        }
-        awaitScriptEngineStopped(engine)
-        true
-    } ?: false
+    ): Boolean = TrackedScriptExecutionLifecycle.stopAndAwait(
+        execution,
+        isRegistered = { tracked ->
+            AutoJs.instance.scriptEngineService.getScriptExecution(tracked.id) === tracked
+        },
+        timeoutMillis = timeoutMillis
+    )
 
-    /** Waits until the engine owned by [execution] is available and destroyed. */
+    /** Waits for [execution]'s engine to be destroyed, or for an engine-less exit. */
     suspend fun awaitTrackedScriptStopped(
         execution: ScriptExecution,
         timeoutMillis: Long = 5_000L
-    ): Boolean = withTimeoutOrNull(timeoutMillis) {
-        awaitScriptEngineStopped(awaitTrackedScriptEngine(execution))
-        true
-    } ?: false
-
-    private suspend fun awaitTrackedScriptEngine(execution: ScriptExecution): ScriptEngine<*> {
-        while (true) {
-            execution.engine?.let { return it }
-            delay(TRACKED_SCRIPT_POLL_INTERVAL_MILLIS)
-        }
-    }
-
-    private suspend fun awaitScriptEngineStopped(engine: ScriptEngine<*>) {
-        while (!engine.isDestroyed) {
-            delay(TRACKED_SCRIPT_POLL_INTERVAL_MILLIS)
-        }
-    }
+    ): Boolean = TrackedScriptExecutionLifecycle.awaitStopped(
+        execution,
+        isRegistered = { tracked ->
+            AutoJs.instance.scriptEngineService.getScriptExecution(tracked.id) === tracked
+        },
+        timeoutMillis = timeoutMillis
+    )
 
     fun getAllScriptTasks(): Deferred<MutableList<TaskInfo>> = scope.async {
         return@async serviceConnection.getAllScriptTasks()
@@ -198,5 +187,58 @@ object EngineController {
         globalScriptListener.remove(listener)
 
     private val TAG = "EngineController"
-    private const val TRACKED_SCRIPT_POLL_INTERVAL_MILLIS = 25L
+}
+
+internal object TrackedScriptExecutionLifecycle {
+    private const val POLL_INTERVAL_MILLIS = 25L
+
+    suspend fun stopAndAwait(
+        execution: ScriptExecution,
+        isRegistered: (ScriptExecution) -> Boolean,
+        timeoutMillis: Long,
+        pollIntervalMillis: Long = POLL_INTERVAL_MILLIS
+    ): Boolean = withTimeoutOrNull(timeoutMillis) {
+        val engine = awaitEngine(execution, isRegistered, pollIntervalMillis)
+            ?: return@withTimeoutOrNull true
+        if (!engine.isDestroyed) {
+            engine.forceStop()
+        }
+        awaitEngineStopped(engine, pollIntervalMillis)
+        true
+    } ?: false
+
+    suspend fun awaitStopped(
+        execution: ScriptExecution,
+        isRegistered: (ScriptExecution) -> Boolean,
+        timeoutMillis: Long,
+        pollIntervalMillis: Long = POLL_INTERVAL_MILLIS
+    ): Boolean = withTimeoutOrNull(timeoutMillis) {
+        val engine = awaitEngine(execution, isRegistered, pollIntervalMillis)
+            ?: return@withTimeoutOrNull true
+        awaitEngineStopped(engine, pollIntervalMillis)
+        true
+    } ?: false
+
+    private suspend fun awaitEngine(
+        execution: ScriptExecution,
+        isRegistered: (ScriptExecution) -> Boolean,
+        pollIntervalMillis: Long
+    ): ScriptEngine<*>? {
+        while (true) {
+            execution.engine?.let { return it }
+            if (!isRegistered(execution)) {
+                return null
+            }
+            delay(pollIntervalMillis)
+        }
+    }
+
+    private suspend fun awaitEngineStopped(
+        engine: ScriptEngine<*>,
+        pollIntervalMillis: Long
+    ) {
+        while (!engine.isDestroyed) {
+            delay(pollIntervalMillis)
+        }
+    }
 }
