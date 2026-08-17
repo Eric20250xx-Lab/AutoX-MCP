@@ -4,11 +4,9 @@ import android.content.Context
 import android.util.Log
 import com.aiselp.autox.engine.NodeScriptSource
 import com.stardust.autojs.AutoJs
-import com.stardust.autojs.execution.ScriptExecution
 import com.stardust.autojs.script.AutoFileSource
 import com.stardust.autojs.script.JavaScriptFileSource
 import com.stardust.autojs.script.ScriptSource
-import com.stardust.autojs.servicecomponents.EngineController
 import java.io.File
 
 internal object ScriptGuardianExecutionGuard {
@@ -55,41 +53,9 @@ internal object ScriptGuardianExecutionGuard {
         return source.sourceFileOrNull()?.sameFileAs(guardedFile) != true
     }
 
-    suspend fun stopExistingMainProcessExecutions(config: ScriptGuardianConfig): Boolean {
-        val target = config.resolveScriptFile().getOrElse { return false }.canonicalFile
-        repeat(MAIN_PROCESS_SCAN_ATTEMPTS) {
-            val matches = (mainProcessExecutions() ?: return false)
-                .filter { execution -> execution.source.sourceFileOrNull()?.sameFileAs(target) == true }
-            if (matches.isEmpty()) {
-                return true
-            }
-            for (execution in matches) {
-                val stopped = runCatching {
-                    EngineController.stopTrackedScriptAndAwait(execution)
-                }.getOrDefault(false)
-                if (!stopped) {
-                    Log.w(TAG, "Timed out stopping an existing guarded script")
-                    return false
-                }
-            }
-        }
-        return (mainProcessExecutions() ?: return false).none { execution ->
-            execution.source.sourceFileOrNull()?.sameFileAs(target) == true
-        }
-    }
-
-    private fun mainProcessExecutions(): List<ScriptExecution>? = runCatching {
-        AutoJs.instance.scriptEngineService.scriptExecutions.toList()
-    }.getOrElse { error ->
-        Log.w(TAG, "Could not inspect main-process scripts", error)
-        null
-    }
-
     private fun File.sameFileAs(other: File): Boolean = runCatching {
         canonicalPath == other.canonicalPath
     }.getOrDefault(false)
-
-    private const val MAIN_PROCESS_SCAN_ATTEMPTS = 3
 }
 
 internal fun ScriptSource.sourceFileOrNull(): File? = when (this) {

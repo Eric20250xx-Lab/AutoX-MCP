@@ -4,12 +4,29 @@ import android.app.Activity
 import android.app.Application
 import android.content.SharedPreferences
 import android.os.Bundle
-import android.util.Log
 import androidx.preference.PreferenceManager
-import com.stardust.autojs.servicecomponents.EngineController
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.launch
 import java.util.concurrent.ConcurrentHashMap
+
+internal sealed interface ScriptGuardianPreferenceAction {
+    data class Apply(val config: ScriptGuardianConfig) : ScriptGuardianPreferenceAction
+    data object Stop : ScriptGuardianPreferenceAction
+    data object None : ScriptGuardianPreferenceAction
+}
+
+internal class ScriptGuardianPreferenceState(initiallyEnabled: Boolean) {
+    private var lastObservedEnabled = initiallyEnabled
+
+    @Synchronized
+    fun transition(config: ScriptGuardianConfig): ScriptGuardianPreferenceAction {
+        val wasEnabled = lastObservedEnabled
+        lastObservedEnabled = config.enabled
+        return when {
+            config.enabled -> ScriptGuardianPreferenceAction.Apply(config)
+            wasEnabled -> ScriptGuardianPreferenceAction.Stop
+            else -> ScriptGuardianPreferenceAction.None
+        }
+    }
+}
 
 internal class ScriptGuardianPreferenceBridge(private val application: Application) :
     SharedPreferences.OnSharedPreferenceChangeListener,
@@ -17,9 +34,9 @@ internal class ScriptGuardianPreferenceBridge(private val application: Applicati
     private val prefs = PreferenceManager.getDefaultSharedPreferences(application)
     private val watchedKeys = ScriptGuardianPrefs.watchedKeys(application)
     private val resumedActivities = ConcurrentHashMap.newKeySet<Activity>()
-    private var applyJob: Job? = null
-    @Volatile
-    private var lastObservedEnabled = prefs.getBoolean(ScriptGuardianPrefs.KEY_ENABLED, false)
+    private val state = ScriptGuardianPreferenceState(
+        prefs.getBoolean(ScriptGuardianPrefs.KEY_ENABLED, false)
+    )
 
     fun start() {
         prefs.registerOnSharedPreferenceChangeListener(this)
@@ -29,8 +46,6 @@ internal class ScriptGuardianPreferenceBridge(private val application: Applicati
     fun stop() {
         prefs.unregisterOnSharedPreferenceChangeListener(this)
         application.unregisterActivityLifecycleCallbacks(this)
-        applyJob?.cancel()
-        applyJob = null
     }
 
     override fun onSharedPreferenceChanged(sharedPreferences: SharedPreferences?, key: String?) {
@@ -63,36 +78,12 @@ internal class ScriptGuardianPreferenceBridge(private val application: Applicati
 
     private fun applyState(config: ScriptGuardianConfig) {
         ScriptGuardianExecutionGuard.updateConfig(config)
-        val wasEnabled = lastObservedEnabled
-        lastObservedEnabled = config.enabled
-        applyJob?.cancel()
-        applyJob = EngineController.scope.launch {
-            if (!config.enabled) {
-                if (wasEnabled && resumedActivities.isNotEmpty()) {
-                    ScriptGuardianService.stop(application)
-                }
-                return@launch
-            }
+        when (val action = state.transition(config)) {
+            is ScriptGuardianPreferenceAction.Apply ->
+                ScriptGuardianService.applyConfig(application, action.config)
 
-            if (config.resolveScriptFile().isFailure) {
-                if (resumedActivities.isNotEmpty()) {
-                    ScriptGuardianService.applyConfig(application, config)
-                }
-                return@launch
-            }
-
-            val stopped = ScriptGuardianExecutionGuard.stopExistingMainProcessExecutions(config)
-            if (!stopped) {
-                Log.w(TAG, "Guardian start deferred because an existing script did not stop")
-                return@launch
-            }
-            if (resumedActivities.isNotEmpty()) {
-                ScriptGuardianService.applyConfig(application, config)
-            }
+            ScriptGuardianPreferenceAction.Stop -> ScriptGuardianService.stop(application)
+            ScriptGuardianPreferenceAction.None -> Unit
         }
-    }
-
-    companion object {
-        private const val TAG = "ScriptGuardianPrefs"
     }
 }

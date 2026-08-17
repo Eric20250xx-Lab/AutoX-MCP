@@ -186,8 +186,7 @@
         <service
             android:name="org.autojs.autojs.guardian.ScriptGuardianService"
             android:exported="false"
-            android:foregroundServiceType="specialUse"
-            android:process="@string/text_script_process_name">
+            android:foregroundServiceType="specialUse">
             <property
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="Keeps one user-configured AutoX automation script running" />
