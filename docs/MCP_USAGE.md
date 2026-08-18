@@ -17,7 +17,7 @@
 - 简易鉴权：请求头 `X-Token` 对比 `McpConfig.token`（为空则不校验）。
 
 ## 运行/配置
-- 入口类：`org.autojs.autoxjs.mcp.McpService`（由 `McpServerService` 在 `:script` 进程中托管）
+- 入口类：`org.autojs.autoxjs.mcp.McpService`（由前台 `McpServerService` 托管；该 Service 未声明独立 `android:process`，因此运行在应用主进程）
 - 配置结构：`McpConfig(enabled, host, port, token, allowBase64, allowNetwork)`
 - 设置页开关（推荐）：
   - 进入“设置 → MCP 服务”
