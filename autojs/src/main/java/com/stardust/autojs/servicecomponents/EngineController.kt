@@ -1,7 +1,10 @@
 package com.stardust.autojs.servicecomponents
 
+import android.util.Log
 import com.aiselp.autox.engine.NodeScriptEngine
 import com.stardust.autojs.AutoJs
+import com.stardust.autojs.ScriptExecutionRejectedException
+import com.stardust.autojs.engine.ScriptEngine
 import com.stardust.autojs.execution.ExecutionConfig
 import com.stardust.autojs.execution.ScriptExecution
 import com.stardust.autojs.project.ProjectConfig
@@ -16,7 +19,9 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import java.io.File
 import java.util.concurrent.CopyOnWriteArraySet
 
@@ -65,6 +70,9 @@ object EngineController {
                 source, listener?.toScriptExecutionListener(),
                 ExecutionConfig(workingDirectory = taskInfo.workerDirectory)
             )
+        } catch (e: ScriptExecutionRejectedException) {
+            Log.i(TAG, "Rejected guarded script: ${taskInfo.sourcePath}")
+            listener?.onException(taskInfo, e)
         } catch (e: Throwable) {
             serviceConnection.runScript(taskInfo, listener, config)
         }
@@ -120,6 +128,30 @@ object EngineController {
         )
     }
 
+    /** Stops only [execution]'s engine, or succeeds once it exits before creating one. */
+    suspend fun stopTrackedScriptAndAwait(
+        execution: ScriptExecution,
+        timeoutMillis: Long = 5_000L
+    ): Boolean = TrackedScriptExecutionLifecycle.stopAndAwait(
+        execution,
+        isRegistered = { tracked ->
+            AutoJs.instance.scriptEngineService.getScriptExecution(tracked.id) === tracked
+        },
+        timeoutMillis = timeoutMillis
+    )
+
+    /** Waits for [execution]'s engine to be destroyed, or for an engine-less exit. */
+    suspend fun awaitTrackedScriptStopped(
+        execution: ScriptExecution,
+        timeoutMillis: Long = 5_000L
+    ): Boolean = TrackedScriptExecutionLifecycle.awaitStopped(
+        execution,
+        isRegistered = { tracked ->
+            AutoJs.instance.scriptEngineService.getScriptExecution(tracked.id) === tracked
+        },
+        timeoutMillis = timeoutMillis
+    )
+
     fun getAllScriptTasks(): Deferred<MutableList<TaskInfo>> = scope.async {
         return@async serviceConnection.getAllScriptTasks()
     }
@@ -155,4 +187,58 @@ object EngineController {
         globalScriptListener.remove(listener)
 
     private val TAG = "EngineController"
+}
+
+internal object TrackedScriptExecutionLifecycle {
+    private const val POLL_INTERVAL_MILLIS = 25L
+
+    suspend fun stopAndAwait(
+        execution: ScriptExecution,
+        isRegistered: (ScriptExecution) -> Boolean,
+        timeoutMillis: Long,
+        pollIntervalMillis: Long = POLL_INTERVAL_MILLIS
+    ): Boolean = withTimeoutOrNull(timeoutMillis) {
+        val engine = awaitEngine(execution, isRegistered, pollIntervalMillis)
+            ?: return@withTimeoutOrNull true
+        if (!engine.isDestroyed) {
+            engine.forceStop()
+        }
+        awaitEngineStopped(engine, pollIntervalMillis)
+        true
+    } ?: false
+
+    suspend fun awaitStopped(
+        execution: ScriptExecution,
+        isRegistered: (ScriptExecution) -> Boolean,
+        timeoutMillis: Long,
+        pollIntervalMillis: Long = POLL_INTERVAL_MILLIS
+    ): Boolean = withTimeoutOrNull(timeoutMillis) {
+        val engine = awaitEngine(execution, isRegistered, pollIntervalMillis)
+            ?: return@withTimeoutOrNull true
+        awaitEngineStopped(engine, pollIntervalMillis)
+        true
+    } ?: false
+
+    private suspend fun awaitEngine(
+        execution: ScriptExecution,
+        isRegistered: (ScriptExecution) -> Boolean,
+        pollIntervalMillis: Long
+    ): ScriptEngine<*>? {
+        while (true) {
+            execution.engine?.let { return it }
+            if (!isRegistered(execution)) {
+                return null
+            }
+            delay(pollIntervalMillis)
+        }
+    }
+
+    private suspend fun awaitEngineStopped(
+        engine: ScriptEngine<*>,
+        pollIntervalMillis: Long
+    ) {
+        while (!engine.isDestroyed) {
+            delay(pollIntervalMillis)
+        }
+    }
 }

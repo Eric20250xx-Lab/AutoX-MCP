@@ -15,10 +15,12 @@ import com.stardust.autojs.core.shizuku.ShizukuClient
 import com.stardust.autojs.execution.ExecutionConfig
 import com.stardust.autojs.script.ScriptFile
 import com.stardust.autojs.script.ScriptSource
+import com.stardust.autojs.script.sourceFileOrNull
 import com.stardust.notification.NotificationListenerService
 import io.reactivex.rxjava3.schedulers.Schedulers
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.runBlocking
+import java.io.File
 import java.lang.ref.WeakReference
 
 class ScriptBinder(service: IndependentScriptService, val scope: CoroutineScope) : Binder() {
@@ -41,6 +43,10 @@ class ScriptBinder(service: IndependentScriptService, val scope: CoroutineScope)
 
                 Action.BIND_SHIZUKU_SERVICE.id -> bindShizukuUserService()
                 Action.GET_MEMORY_INFO.id -> getMemoryInfo(reply!!)
+                Action.CONFIGURE_SCRIPT_GUARD_AND_LIST.id ->
+                    configureScriptGuardAndList(data, reply!!)
+
+                Action.STOP_SCRIPT_AND_AWAIT.id -> stopScriptAndAwait(data, reply!!)
                 else -> Log.w(TAG, "unknown action id = $code")
             }
             Log.d(TAG, "action id = $code, complete")
@@ -55,15 +61,48 @@ class ScriptBinder(service: IndependentScriptService, val scope: CoroutineScope)
 
     private fun getAllScriptTasks(data: Parcel, reply: Parcel) {
         val scriptExecutions = AutoJs.instance.scriptEngineService.scriptExecutions
-        val bundle = Bundle().apply { putInt("size", scriptExecutions.size) }
-        for ((i: Int, scriptExecution) in scriptExecutions.withIndex()) {
-            bundle.putBundle(
-                i.toString(),
-                TaskInfo.ExecutionTaskInfo(scriptExecution).toBundle()
-            )
+        writeScriptTasks(reply, scriptExecutions.map { TaskInfo.ExecutionTaskInfo(it) })
+    }
+
+    private fun writeScriptTasks(reply: Parcel, tasks: List<TaskInfo>) {
+        val bundle = Bundle().apply { putInt("size", tasks.size) }
+        for ((i, task) in tasks.withIndex()) {
+            bundle.putBundle(i.toString(), task.toBundle())
         }
         reply.writeNoException()
         reply.writeBundle(bundle)
+    }
+
+    private fun configureScriptGuardAndList(data: Parcel, reply: Parcel) {
+        val guardedPath = data.readString()?.let { File(it).canonicalPath }
+        val guard = guardedPath?.let { expectedPath ->
+            { source: ScriptSource -> !source.matchesCanonicalPath(expectedPath) }
+        }
+        val existing = AutoJs.instance.scriptEngineService
+            .configureScriptExecutionGuardAndSnapshot(guard)
+        val matches = guardedPath?.let { expectedPath ->
+            existing
+                .filter { it.source.matchesCanonicalPath(expectedPath) }
+                .map { TaskInfo.ExecutionTaskInfo(it) }
+        }.orEmpty()
+        writeScriptTasks(reply, matches)
+    }
+
+    private suspend fun stopScriptAndAwait(data: Parcel, reply: Parcel) {
+        val id = data.readInt()
+        val timeoutMillis = data.readLong()
+        check(id >= 0) { "invalid id" }
+        check(timeoutMillis >= 0L) { "invalid timeout" }
+        val execution = AutoJs.instance.scriptEngineService.getScriptExecution(id)
+        val stopped = execution == null ||
+            EngineController.stopTrackedScriptAndAwait(execution, timeoutMillis)
+        reply.writeNoException()
+        reply.writeInt(if (stopped) 1 else 0)
+    }
+
+    private fun ScriptSource.matchesCanonicalPath(expectedPath: String): Boolean {
+        val sourceFile = sourceFileOrNull() ?: return false
+        return runCatching { sourceFile.canonicalPath == expectedPath }.getOrDefault(false)
     }
 
     private fun runScript(data: Parcel) {
@@ -144,6 +183,8 @@ class ScriptBinder(service: IndependentScriptService, val scope: CoroutineScope)
         NOTIFICATION_LISTENER_SERVICE_STATUS(9),
         BIND_SHIZUKU_SERVICE(10),
         GET_MEMORY_INFO(11),
+        CONFIGURE_SCRIPT_GUARD_AND_LIST(12),
+        STOP_SCRIPT_AND_AWAIT(13),
         APP_EXIT(99);
     }
 

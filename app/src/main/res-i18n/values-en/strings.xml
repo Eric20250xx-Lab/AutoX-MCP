@@ -126,6 +126,19 @@
   <string name="text_processing">Processing</string>
   <string name="text_guard_mode">Protected mode</string>
   <string name="summary_guard_mode">The automatic operation command cannot be run in this software interface to avoid accidental touch</string>
+  <string name="text_script_guardian_enable">Enable script guardian</string>
+  <string name="summary_script_guardian_enable">Automatically start the configured script and restart it after it exits</string>
+  <string name="text_script_guardian_path">Guardian script path</string>
+  <string name="summary_script_guardian_path">Path relative to the AutoX script directory, for example: receiver.js</string>
+  <string name="script_guardian_notification_channel_name">Script guardian</string>
+  <string name="script_guardian_notification_channel_description">Keeps the configured AutoX script running</string>
+  <string name="script_guardian_notification_title">Script guardian</string>
+  <string name="script_guardian_status_waiting">Waiting for a valid script path</string>
+  <string name="script_guardian_status_starting">Starting: %1$s</string>
+  <string name="script_guardian_status_running">Running: %1$s</string>
+  <string name="script_guardian_status_stopping">Stopping: %1$s</string>
+  <string name="script_guardian_status_retrying">Retrying in %1$d seconds: %2$s</string>
+  <string name="script_guardian_status_stopped">Stopped</string>
   <string name="text_layout_inspector_is_dumping">Layout analysis in progress</string>
   <string name="text_force_stop">Forced stop</string>
   <string name="text_execution_finished" formatted="false">\n ------------ \n [ %s ] Finished running in %f seconds</string>

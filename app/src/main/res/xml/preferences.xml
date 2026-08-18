@@ -49,6 +49,22 @@
             android:layout="@layout/preference_custom"
             android:summary="@string/summary_guard_mode"
             android:title="@string/text_guard_mode" />
+
+        <SwitchPreference
+            android:defaultValue="false"
+            android:key="@string/key_script_guardian_enabled"
+            android:layout="@layout/preference_custom"
+            android:summary="@string/summary_script_guardian_enable"
+            android:title="@string/text_script_guardian_enable" />
+
+        <EditTextPreference
+            android:defaultValue=""
+            android:dependency="@string/key_script_guardian_enabled"
+            android:inputType="text"
+            android:key="@string/key_script_guardian_path"
+            android:layout="@layout/preference_custom"
+            android:summary="@string/summary_script_guardian_path"
+            android:title="@string/text_script_guardian_path" />
     </PreferenceCategory>
 
     <PreferenceCategory

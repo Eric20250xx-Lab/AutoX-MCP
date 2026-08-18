@@ -23,6 +23,8 @@ import com.stardust.lang.ThreadCompat
 import com.stardust.util.UiHandler
 import io.reactivex.rxjava3.subjects.PublishSubject
 
+class ScriptExecutionRejectedException(message: String) : IllegalStateException(message)
+
 /**
  * Created by Stardust on 2017/1/23.
  */
@@ -34,12 +36,14 @@ class ScriptEngineService internal constructor(builder: ScriptEngineServiceBuild
     private val mEngineLifecycleObserver: EngineLifecycleObserver =
         object : EngineLifecycleObserver() {
             override fun onEngineRemove(engine: ScriptEngine<*>?) {
-                mScriptExecutions.remove(engine!!.id)
+                removeScriptExecution(engine!!.id)
                 super.onEngineRemove(engine)
             }
         }
     private val mScriptExecutionObserver = ScriptExecutionObserver()
-    private val mScriptExecutions = LinkedHashMap<Int, ScriptExecution>()
+    private val mScriptExecutions = ScriptExecutionRegistry()
+    private val scriptExecutionAdmissionLock = Any()
+    private var scriptExecutionGuard: ((ScriptSource) -> Boolean)? = null
     private val disposable = executionEventPublish.subscribe { event ->
         if (event.code == ScriptExecutionEvent.ON_START) {
             globalConsole.verbose(mContext.getString(R.string.text_start_running) + "[" + event.message + "]")
@@ -106,17 +110,43 @@ class ScriptEngineService internal constructor(builder: ScriptEngineServiceBuild
 
     fun startScriptExecution(scriptExecution: ScriptExecution) {
         if (scriptExecution is RunnableScriptExecution) {
-            ThreadCompat(scriptExecution).start()
+            ThreadCompat { runTrackedScriptExecution(scriptExecution, mScriptExecutions) }.start()
         } else if (scriptExecution is ScriptExecuteActivity.ActivityScriptExecution) {
             ScriptExecuteActivity.start(mContext, scriptExecution)
         }
     }
 
+    /** Installs a process-local guard that can reject a script before an execution is created. */
+    fun setScriptExecutionGuard(guard: ((ScriptSource) -> Boolean)?) {
+        synchronized(scriptExecutionAdmissionLock) {
+            scriptExecutionGuard = guard
+        }
+    }
+
+    /**
+     * Atomically updates the process-local admission guard and snapshots registered executions.
+     *
+     * The shared admission lock ensures no guarded execution can be admitted between the guard
+     * update and the returned snapshot.
+     */
+    fun configureScriptExecutionGuardAndSnapshot(
+        guard: ((ScriptSource) -> Boolean)?
+    ): List<ScriptExecution> = synchronized(scriptExecutionAdmissionLock) {
+        scriptExecutionGuard = guard
+        mScriptExecutions.snapshot()
+    }
+
     //脚本启动入口
     private fun executeInternal(task: ScriptExecutionTask): ScriptExecution {
-        setupExecutionTaskListener(task)
-        val execution = createScriptExecution(task)
-        mScriptExecutions[execution.id] = execution
+        val execution = synchronized(scriptExecutionAdmissionLock) {
+            if (scriptExecutionGuard?.invoke(task.source) == false) {
+                throw ScriptExecutionRejectedException(
+                    "Script execution is managed by Script Guardian"
+                )
+            }
+            setupExecutionTaskListener(task)
+            createScriptExecution(task).also(mScriptExecutions::register)
+        }
         startScriptExecution(execution)
         return execution
     }
@@ -150,12 +180,14 @@ class ScriptEngineService internal constructor(builder: ScriptEngineServiceBuild
     val engines: Set<ScriptEngine<*>>
         get() = mScriptEngineManager.engines
     val scriptExecutions: Collection<ScriptExecution>
-        get() = mScriptExecutions.values
+        get() = mScriptExecutions.snapshot()
 
     fun getScriptExecution(id: Int): ScriptExecution? {
-        return if (id == ScriptExecution.NO_ID) {
-            null
-        } else mScriptExecutions[id]
+        return mScriptExecutions.get(id)
+    }
+
+    private fun removeScriptExecution(id: Int) {
+        mScriptExecutions.remove(id)
     }
 
     private open class EngineLifecycleObserver : EngineLifecycleCallback {
@@ -257,5 +289,45 @@ class ScriptEngineService internal constructor(builder: ScriptEngineServiceBuild
                 check(sInstance == null)
                 sInstance = service
             }
+    }
+}
+
+internal class ScriptExecutionRegistry {
+    private val executions = LinkedHashMap<Int, ScriptExecution>()
+
+    @Synchronized
+    fun register(execution: ScriptExecution) {
+        executions[execution.id] = execution
+    }
+
+    @Synchronized
+    fun get(id: Int): ScriptExecution? {
+        return if (id == ScriptExecution.NO_ID) null else executions[id]
+    }
+
+    @Synchronized
+    fun remove(id: Int) {
+        executions.remove(id)
+    }
+
+    @Synchronized
+    fun remove(execution: ScriptExecution) {
+        if (executions[execution.id] === execution) {
+            executions.remove(execution.id)
+        }
+    }
+
+    @Synchronized
+    fun snapshot(): List<ScriptExecution> = executions.values.toList()
+}
+
+internal fun runTrackedScriptExecution(
+    execution: RunnableScriptExecution,
+    registry: ScriptExecutionRegistry
+) {
+    try {
+        execution.run()
+    } finally {
+        registry.remove(execution)
     }
 }

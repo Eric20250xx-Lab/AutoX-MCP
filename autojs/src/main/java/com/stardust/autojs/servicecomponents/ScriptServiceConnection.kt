@@ -22,13 +22,17 @@ import kotlinx.coroutines.GlobalScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeout
+import java.io.File
 
-class ScriptServiceConnection : ServiceConnection {
+class ScriptServiceConnection(
+    private val registerConsoleListenerOnConnect: Boolean = true
+) : ServiceConnection, AutoCloseable {
     val binderConsoleListener = BinderConsoleListener.ClientInterface()
     var binding: CompletableJob? = null
     var service: IBinder? = null
     var application: Context? = null
-    private val connected = Job()
+    @Volatile
+    private var isBound = false
     val consoleImpl: ConsoleImpl =
         object : ConsoleImpl(UiHandler(GlobalAppContext.get())), BinderConsoleListener {
             override fun onPrintln(log: LogEntry) {
@@ -47,29 +51,48 @@ class ScriptServiceConnection : ServiceConnection {
     @OptIn(DelicateCoroutinesApi::class)
     override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
         this.service = service
+        isBound = true
         isConnected = true
         binding?.complete()
-        connected.complete()
         binderConsoleListener.logPublish.onNext(
             LogEntry(
                 level = Log.INFO,
                 content = "Script service connected"
             )
         )
-        GlobalScope.launch {
-            registerGlobalConsoleListener(binderConsoleListener)
+        if (registerConsoleListenerOnConnect) {
+            GlobalScope.launch {
+                registerGlobalConsoleListener(binderConsoleListener)
+            }
         }
     }
 
     override fun onServiceDisconnected(name: ComponentName?) {
+        service = null
         isConnected = false
-        binding = null
+        binding = if (isBound) Job() else null
         binderConsoleListener.logPublish.onNext(
             LogEntry(
                 level = Log.ERROR,
                 content = "Script service disconnected"
             )
         )
+    }
+
+    override fun onBindingDied(name: ComponentName?) {
+        rebindAfterBrokenConnection("Script service binding died")
+    }
+
+    override fun onNullBinding(name: ComponentName?) {
+        rebindAfterBrokenConnection("Script service returned a null binding")
+    }
+
+    private fun rebindAfterBrokenConnection(message: String) {
+        val appContext = application ?: return
+        unbind(clearApplication = false)
+        binderConsoleListener.logPublish.onNext(LogEntry(level = Log.ERROR, content = message))
+        runCatching { bind(appContext) }
+            .onFailure { Log.w(TAG, "Unable to rebind script service", it) }
     }
 
     private suspend fun <T> sendBinder(n: suspend TanBinder.() -> T): T {
@@ -89,6 +112,31 @@ class ScriptServiceConnection : ServiceConnection {
             tasks.add(TaskInfo.fromBundle(bundle.getBundle((i - 1).toString())!!))
         }
         return@sendBinder tasks
+    }
+
+    suspend fun configureScriptGuardAndList(path: String?): List<TaskInfo> = sendBinder {
+        action = ScriptBinder.Action.CONFIGURE_SCRIPT_GUARD_AND_LIST.id
+        data.writeString(path?.let { File(it).canonicalPath })
+        send()
+        reply!!.readException()
+        return@sendBinder readTaskList(reply.readBundle(ClassLoader.getSystemClassLoader()))
+    }
+
+    suspend fun stopScriptAndAwait(id: Int, timeoutMillis: Long): Boolean = sendBinder {
+        action = ScriptBinder.Action.STOP_SCRIPT_AND_AWAIT.id
+        data.writeInt(id)
+        data.writeLong(timeoutMillis)
+        send()
+        reply!!.readException()
+        return@sendBinder reply.readInt() == 1
+    }
+
+    private fun readTaskList(bundle: Bundle?): List<TaskInfo> {
+        check(bundle != null) { "bundle is null" }
+        val size = bundle.getInt("size")
+        return List(size) { index ->
+            TaskInfo.fromBundle(bundle.getBundle(index.toString())!!)
+        }
     }
 
     suspend fun runScript(
@@ -167,20 +215,53 @@ class ScriptServiceConnection : ServiceConnection {
             }
         }
         Log.d(TAG, "awaitConnected")
-        binding!!.join()
+        val pendingBinding = binding
+            ?: throw IllegalStateException("ScriptServiceConnection failed to bind")
+        pendingBinding.join()
+        check(isConnected && service != null) { "Script service is not connected" }
     }
 
+    @Synchronized
     fun bind(context: Context) {
-        if (isConnected) return
-        application = context.applicationContext
-        context.applicationContext.bindService(
-            Intent(context, IndependentScriptService::class.java),
+        if (isConnected || isBound || binding?.isActive == true) return
+        val appContext = context.applicationContext
+        application = appContext
+        val pendingBinding = Job()
+        binding = pendingBinding
+        isBound = appContext.bindService(
+            Intent(appContext, IndependentScriptService::class.java),
             this,
             Context.BIND_AUTO_CREATE
         )
-        binding = Job()
-
+        if (!isBound) {
+            binding = null
+            application = null
+            pendingBinding.complete()
+            throw IllegalStateException("Unable to bind script service")
+        }
     }
+
+    @Synchronized
+    fun unbind() = unbind(clearApplication = true)
+
+    @Synchronized
+    private fun unbind(clearApplication: Boolean) {
+        val appContext = application
+        if (isBound && appContext != null) {
+            runCatching { appContext.unbindService(this) }
+                .onFailure { Log.w(TAG, "Unable to unbind script service", it) }
+        }
+        isBound = false
+        isConnected = false
+        service = null
+        binding?.cancel()
+        binding = null
+        if (clearApplication) {
+            application = null
+        }
+    }
+
+    override fun close() = unbind()
 
     companion object {
         private const val TAG = "ScriptServiceConnection"
