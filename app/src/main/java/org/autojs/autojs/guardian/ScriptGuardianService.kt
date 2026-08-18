@@ -15,10 +15,12 @@ import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import org.autojs.autoxjs.R
 
@@ -27,6 +29,7 @@ class ScriptGuardianService : Service() {
     private val serviceScope = CoroutineScope(serviceJob + Dispatchers.IO)
     private val mainHandler = Handler(Looper.getMainLooper())
     private lateinit var supervisor: ScriptGuardianSupervisor
+    private lateinit var runner: EngineScriptGuardianRunner
 
     @Volatile
     private var foregroundStarted = false
@@ -38,19 +41,19 @@ class ScriptGuardianService : Service() {
     override fun onCreate() {
         super.onCreate()
         startForegroundIfNeeded(getString(R.string.script_guardian_status_waiting))
+        runner = EngineScriptGuardianRunner(applicationContext)
         supervisor = createSupervisor()
     }
 
     private fun createSupervisor() = ScriptGuardianSupervisor(
         scope = serviceScope,
-        runner = EngineScriptGuardianRunner(),
+        runner = runner,
         onStatus = ::renderStatus
     )
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         startForegroundIfNeeded(getString(R.string.script_guardian_status_waiting))
         if (intent?.action == ACTION_STOP) {
-            ScriptGuardianExecutionGuard.updateConfig(null)
             pendingConfig = null
             processConfig = null
             stopGuardian()
@@ -63,10 +66,11 @@ class ScriptGuardianService : Service() {
             processConfig ?: ScriptGuardianPrefs.load(this)
         }
         processConfig = config
-        ScriptGuardianExecutionGuard.updateConfig(config)
         if (stopping) {
-            if (config.enabled) {
+            if (config.enabled && config.resolveScriptFile().isSuccess) {
                 pendingConfig = config
+            } else {
+                pendingConfig = null
             }
             return if (config.enabled) START_STICKY else START_NOT_STICKY
         }
@@ -78,6 +82,9 @@ class ScriptGuardianService : Service() {
         mainHandler.removeCallbacksAndMessages(null)
         if (::supervisor.isInitialized) {
             supervisor.closeNow()
+        }
+        if (::runner.isInitialized) {
+            runner.close()
         }
         serviceScope.cancel()
         stopForeground(STOP_FOREGROUND_REMOVE)
@@ -102,8 +109,10 @@ class ScriptGuardianService : Service() {
             },
             onFailure = { error ->
                 invalidConfigReason = error.message ?: error.javaClass.simpleName
-                supervisor.reconcile(null)
                 updateNotification(getString(R.string.script_guardian_status_waiting))
+                pendingConfig = null
+                processConfig = null
+                stopGuardian()
             }
         )
     }
@@ -114,6 +123,7 @@ class ScriptGuardianService : Service() {
         configEnabled = false
         serviceScope.launch {
             supervisor.close()
+            releaseGuardUntilSuccessful()
             mainHandler.post {
                 val nextConfig = pendingConfig
                 pendingConfig = null
@@ -123,11 +133,27 @@ class ScriptGuardianService : Service() {
                     processConfig = nextConfig
                     applyConfig(nextConfig)
                 } else {
+                    runner.close()
                     stopForeground(STOP_FOREGROUND_REMOVE)
                     foregroundStarted = false
                     stopSelf()
                 }
             }
+        }
+    }
+
+    private suspend fun releaseGuardUntilSuccessful() {
+        while (serviceJob.isActive) {
+            try {
+                runner.releaseGuard()
+                return
+            } catch (error: CancellationException) {
+                throw error
+            } catch (_: Exception) {
+                // Keep the foreground service alive until the remote process acknowledges release.
+            }
+            updateNotification(getString(R.string.script_guardian_status_waiting))
+            delay(GUARD_RELEASE_RETRY_MILLIS)
         }
     }
 
@@ -226,6 +252,7 @@ class ScriptGuardianService : Service() {
         private const val EXTRA_ENABLED = "enabled"
         private const val EXTRA_PATH = "path"
         private const val EXTRA_SCRIPT_ROOT = "script_root"
+        private const val GUARD_RELEASE_RETRY_MILLIS = 5_000L
 
         @Volatile
         private var processConfig: ScriptGuardianConfig? = null

@@ -2,36 +2,25 @@ package org.autojs.autojs.guardian
 
 import android.content.Context
 import android.util.Log
-import com.aiselp.autox.engine.NodeScriptSource
 import com.stardust.autojs.AutoJs
-import com.stardust.autojs.script.AutoFileSource
-import com.stardust.autojs.script.JavaScriptFileSource
+import com.stardust.autojs.execution.ScriptExecution
 import com.stardust.autojs.script.ScriptSource
+import com.stardust.autojs.script.sourceFileOrNull
 import java.io.File
 
 internal object ScriptGuardianExecutionGuard {
     private const val TAG = "ScriptGuardianGuard"
     private val managedLaunch = ThreadLocal<Boolean>()
-    @Volatile
-    private var processGuardedFile: File? = null
 
     fun install(context: Context) {
-        updateConfig(ScriptGuardianPrefs.load(context.applicationContext))
-        AutoJs.instance.scriptEngineService.setScriptExecutionGuard { source ->
-            val allowed = allows(source)
-            if (!allowed) {
-                Log.i(TAG, "Blocked a second launch of the guarded script")
-            }
-            allowed
-        }
+        val guardedFile = resolveGuardedFile(ScriptGuardianPrefs.load(context.applicationContext))
+        AutoJs.instance.scriptEngineService.setScriptExecutionGuard(guardFor(guardedFile))
     }
 
-    fun updateConfig(config: ScriptGuardianConfig?) {
-        processGuardedFile = config
-            ?.takeIf { candidate -> candidate.enabled }
-            ?.resolveScriptFile()
-            ?.getOrNull()
-            ?.canonicalFile
+    fun configureAndSnapshot(file: File?): Collection<ScriptExecution> {
+        val guardedFile = file?.canonicalFile
+        return AutoJs.instance.scriptEngineService
+            .configureScriptExecutionGuardAndSnapshot(guardFor(guardedFile))
     }
 
     fun <T> runManagedLaunch(block: () -> T): T {
@@ -48,7 +37,7 @@ internal object ScriptGuardianExecutionGuard {
         }
     }
 
-    internal fun allows(source: ScriptSource, guardedFile: File? = processGuardedFile): Boolean {
+    internal fun allows(source: ScriptSource, guardedFile: File?): Boolean {
         if (managedLaunch.get() == true || guardedFile == null) return true
         return source.sourceFileOrNull()?.sameFileAs(guardedFile) != true
     }
@@ -56,11 +45,21 @@ internal object ScriptGuardianExecutionGuard {
     private fun File.sameFileAs(other: File): Boolean = runCatching {
         canonicalPath == other.canonicalPath
     }.getOrDefault(false)
-}
 
-internal fun ScriptSource.sourceFileOrNull(): File? = when (this) {
-    is JavaScriptFileSource -> file
-    is NodeScriptSource -> file
-    is AutoFileSource -> file
-    else -> null
+    private fun resolveGuardedFile(config: ScriptGuardianConfig?): File? = config
+        ?.takeIf { candidate -> candidate.enabled }
+        ?.resolveScriptFile()
+        ?.getOrNull()
+        ?.canonicalFile
+
+    private fun guardFor(guardedFile: File?): ((ScriptSource) -> Boolean)? =
+        guardedFile?.let { file ->
+            { source ->
+                val allowed = allows(source, file)
+                if (!allowed) {
+                    Log.i(TAG, "Blocked a second launch of the guarded script")
+                }
+                allowed
+            }
+        }
 }

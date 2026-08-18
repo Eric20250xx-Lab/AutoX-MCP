@@ -51,7 +51,6 @@ internal class ScriptGuardianPreferenceBridge(private val application: Applicati
     override fun onSharedPreferenceChanged(sharedPreferences: SharedPreferences?, key: String?) {
         if (key in watchedKeys) {
             val config = ScriptGuardianPrefs.load(application)
-            ScriptGuardianExecutionGuard.updateConfig(config)
             if (resumedActivities.isNotEmpty()) {
                 applyState(config)
             }
@@ -77,7 +76,6 @@ internal class ScriptGuardianPreferenceBridge(private val application: Applicati
     override fun onActivitySaveInstanceState(activity: Activity, outState: Bundle) = Unit
 
     private fun applyState(config: ScriptGuardianConfig) {
-        ScriptGuardianExecutionGuard.updateConfig(config)
         when (val action = state.transition(config)) {
             is ScriptGuardianPreferenceAction.Apply ->
                 ScriptGuardianService.applyConfig(application, action.config)

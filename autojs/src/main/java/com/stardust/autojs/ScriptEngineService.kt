@@ -42,7 +42,7 @@ class ScriptEngineService internal constructor(builder: ScriptEngineServiceBuild
         }
     private val mScriptExecutionObserver = ScriptExecutionObserver()
     private val mScriptExecutions = ScriptExecutionRegistry()
-    @Volatile
+    private val scriptExecutionAdmissionLock = Any()
     private var scriptExecutionGuard: ((ScriptSource) -> Boolean)? = null
     private val disposable = executionEventPublish.subscribe { event ->
         if (event.code == ScriptExecutionEvent.ON_START) {
@@ -118,19 +118,35 @@ class ScriptEngineService internal constructor(builder: ScriptEngineServiceBuild
 
     /** Installs a process-local guard that can reject a script before an execution is created. */
     fun setScriptExecutionGuard(guard: ((ScriptSource) -> Boolean)?) {
+        synchronized(scriptExecutionAdmissionLock) {
+            scriptExecutionGuard = guard
+        }
+    }
+
+    /**
+     * Atomically updates the process-local admission guard and snapshots registered executions.
+     *
+     * The shared admission lock ensures no guarded execution can be admitted between the guard
+     * update and the returned snapshot.
+     */
+    fun configureScriptExecutionGuardAndSnapshot(
+        guard: ((ScriptSource) -> Boolean)?
+    ): List<ScriptExecution> = synchronized(scriptExecutionAdmissionLock) {
         scriptExecutionGuard = guard
+        mScriptExecutions.snapshot()
     }
 
     //脚本启动入口
     private fun executeInternal(task: ScriptExecutionTask): ScriptExecution {
-        if (scriptExecutionGuard?.invoke(task.source) == false) {
-            throw ScriptExecutionRejectedException(
-                "Script execution is managed by Script Guardian"
-            )
+        val execution = synchronized(scriptExecutionAdmissionLock) {
+            if (scriptExecutionGuard?.invoke(task.source) == false) {
+                throw ScriptExecutionRejectedException(
+                    "Script execution is managed by Script Guardian"
+                )
+            }
+            setupExecutionTaskListener(task)
+            createScriptExecution(task).also(mScriptExecutions::register)
         }
-        setupExecutionTaskListener(task)
-        val execution = createScriptExecution(task)
-        mScriptExecutions.register(execution)
         startScriptExecution(execution)
         return execution
     }

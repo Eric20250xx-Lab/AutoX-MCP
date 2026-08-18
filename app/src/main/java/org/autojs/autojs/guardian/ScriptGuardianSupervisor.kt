@@ -12,7 +12,7 @@ import kotlin.math.min
 internal interface ScriptGuardianExecution
 
 internal interface ScriptGuardianRunner {
-    fun findRunning(file: File): List<ScriptGuardianExecution>
+    suspend fun findRunning(file: File): List<ScriptGuardianExecution>
 
     fun start(
         file: File,
@@ -31,6 +31,10 @@ internal interface ScriptGuardianRunner {
     ): Boolean
 
     fun stopNow(execution: ScriptGuardianExecution)
+
+    suspend fun releaseGuard()
+
+    fun close()
 
     companion object {
         const val STOP_TIMEOUT_MILLIS = 5_000L
@@ -71,7 +75,11 @@ internal class ScriptGuardianSupervisor(
         data class Apply(val file: File?) : Command
         data class Started(val slotId: Long) : Command
         data class Finished(val slotId: Long) : Command
-        data class TakeoverCompleted(val generation: Long, val success: Boolean) : Command
+        data class TakeoverCompleted(
+            val generation: Long,
+            val success: Boolean,
+            val reason: String
+        ) : Command
         data class StopCompleted(val slotId: Long, val success: Boolean) : Command
         data class RetryStop(val slotId: Long) : Command
         data class RetryStart(val generation: Long) : Command
@@ -186,25 +194,24 @@ internal class ScriptGuardianSupervisor(
             return
         }
 
-        val existing = runCatching { runner.findRunning(target.file) }
-            .getOrElse {
-                scheduleRetry(target, it.message ?: it.javaClass.simpleName)
-                return
-            }
-        if (existing.isEmpty()) {
-            start(target)
-            return
-        }
-
         takeoverGeneration = target.generation
         onStatus(ScriptGuardianStatus.Stopping(target.file))
         takeoverJob = scope.launch {
-            var success = true
-            for (execution in existing) {
-                val stopped = runCatching { runner.stopAndAwait(execution) }.getOrDefault(false)
-                success = stopped && success
+            val result = runCatching {
+                val existing = runner.findRunning(target.file)
+                for (execution in existing) {
+                    check(runner.stopAndAwait(execution)) {
+                        "existing script did not stop"
+                    }
+                }
             }
-            commands.send(Command.TakeoverCompleted(target.generation, success))
+            commands.send(
+                Command.TakeoverCompleted(
+                    generation = target.generation,
+                    success = result.isSuccess,
+                    reason = result.exceptionOrNull()?.message ?: "existing script did not stop"
+                )
+            )
         }
     }
 
@@ -222,7 +229,7 @@ internal class ScriptGuardianSupervisor(
         } else if (command.success) {
             start(target)
         } else {
-            scheduleRetry(target, "existing script did not stop")
+            scheduleRetry(target, command.reason)
         }
     }
 

@@ -2,6 +2,7 @@ package com.stardust.autojs.servicecomponents
 
 import android.os.Bundle
 import com.stardust.autojs.execution.ScriptExecution
+import com.stardust.autojs.script.sourceFileOrNull
 import java.io.Serializable
 
 interface TaskInfo : Serializable {
@@ -58,7 +59,7 @@ interface TaskInfo : Serializable {
             desc = source.toString()
             engineName = source.engineName
             workerDirectory = exception.config.workingDirectory
-            sourcePath = source.toString()
+            sourcePath = source.sourceFileOrNull()?.path ?: source.toString()
         }
     }
 }

@@ -149,6 +149,22 @@ class ScriptGuardianSupervisorTest {
     }
 
     @Test
+    fun lookupFailureDoesNotStartManagedCopy() = runBlocking {
+        runner.lookupFailures = 1
+
+        supervisor.reconcile(A)
+        yield()
+
+        assertTrue(runner.startedFiles.isEmpty())
+        assertTrue(waits.hasPending(5_000L))
+
+        waits.release(5_000L)
+        yield()
+
+        assertEquals(listOf(A), runner.startedFiles)
+    }
+
+    @Test
     fun retryBackoffGrowsAndCaps() = runBlocking {
         runner.startFailures = 6
         supervisor.reconcile(A)
@@ -193,9 +209,16 @@ class ScriptGuardianSupervisorTest {
         var startFailures = 0
         var finishBeforeReturn = false
         var stopGate: CompletableDeferred<Boolean>? = null
+        var lookupFailures = 0
+        var guardReleased = false
 
-        override fun findRunning(file: File): List<ScriptGuardianExecution> =
-            existing.remove(file.canonicalPath)?.toList().orEmpty()
+        override suspend fun findRunning(file: File): List<ScriptGuardianExecution> {
+            if (lookupFailures > 0) {
+                lookupFailures -= 1
+                throw IllegalStateException("remote lookup failed")
+            }
+            return existing.remove(file.canonicalPath)?.toList().orEmpty()
+        }
 
         override fun start(
             file: File,
@@ -237,6 +260,12 @@ class ScriptGuardianSupervisorTest {
         override fun stopNow(execution: ScriptGuardianExecution) {
             stopped += execution
         }
+
+        override suspend fun releaseGuard() {
+            guardReleased = true
+        }
+
+        override fun close() = Unit
     }
 
     private class ManualWait {
