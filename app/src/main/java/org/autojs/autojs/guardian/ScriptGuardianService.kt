@@ -30,6 +30,11 @@ class ScriptGuardianService : Service() {
     private val mainHandler = Handler(Looper.getMainLooper())
     private lateinit var supervisor: ScriptGuardianSupervisor
     private lateinit var runner: EngineScriptGuardianRunner
+    private lateinit var diagnostics: ScriptGuardianDiagnostics
+    private lateinit var wakeLockLease: ScriptGuardianWakeLockLease
+    private val heartbeatSink: (ScriptGuardianHeartbeatReport) -> Boolean = { report ->
+        if (::supervisor.isInitialized) supervisor.reportHeartbeat(report) else false
+    }
 
     @Volatile
     private var foregroundStarted = false
@@ -41,8 +46,19 @@ class ScriptGuardianService : Service() {
     override fun onCreate() {
         super.onCreate()
         startForegroundIfNeeded(getString(R.string.script_guardian_status_waiting))
+        diagnostics = ScriptGuardianDiagnostics(applicationContext)
         runner = EngineScriptGuardianRunner(applicationContext)
         supervisor = createSupervisor()
+        wakeLockLease = ScriptGuardianWakeLockLease(
+            scope = serviceScope,
+            factory = ScriptGuardianWakeLockLease.androidFactory(applicationContext),
+            onHeldChanged = { held -> diagnostics.recordWakeLock(held) },
+            onFailure = { error ->
+                Log.w("ScriptGuardianService", "Script Guardian wake lock failure", error)
+                diagnostics.recordWakeLock(wakeLockLease.isHeld(), error)
+            }
+        )
+        ScriptGuardianHeartbeat.bind(heartbeatSink)
     }
 
     private fun createSupervisor() = ScriptGuardianSupervisor(
@@ -80,6 +96,10 @@ class ScriptGuardianService : Service() {
 
     override fun onDestroy() {
         mainHandler.removeCallbacksAndMessages(null)
+        ScriptGuardianHeartbeat.unbind(heartbeatSink)
+        if (::wakeLockLease.isInitialized) {
+            wakeLockLease.stop()
+        }
         if (::supervisor.isInitialized) {
             supervisor.closeNow()
         }
@@ -105,6 +125,7 @@ class ScriptGuardianService : Service() {
         config.resolveScriptFile().fold(
             onSuccess = { file ->
                 invalidConfigReason = null
+                wakeLockLease.start()
                 supervisor.reconcile(file)
             },
             onFailure = { error ->
@@ -121,6 +142,7 @@ class ScriptGuardianService : Service() {
         if (stopping) return
         stopping = true
         configEnabled = false
+        wakeLockLease.stop()
         serviceScope.launch {
             supervisor.close()
             releaseGuardUntilSuccessful()
@@ -158,6 +180,7 @@ class ScriptGuardianService : Service() {
     }
 
     private fun renderStatus(status: ScriptGuardianStatus) {
+        diagnostics.recordStatus(status)
         val text = when (status) {
             ScriptGuardianStatus.Disabled -> {
                 if (configEnabled && invalidConfigReason != null) {
@@ -172,8 +195,25 @@ class ScriptGuardianService : Service() {
                 status.file.name
             )
 
-            is ScriptGuardianStatus.Running -> getString(
-                R.string.script_guardian_status_running,
+            is ScriptGuardianStatus.Running -> when (status.heartbeat?.state) {
+                ScriptGuardianHeartbeatState.IDLE -> getString(
+                    R.string.script_guardian_status_idle,
+                    status.file.name
+                )
+
+                ScriptGuardianHeartbeatState.BUSY -> getString(
+                    R.string.script_guardian_status_busy,
+                    status.file.name
+                )
+
+                null -> getString(
+                    R.string.script_guardian_status_running,
+                    status.file.name
+                )
+            }
+
+            is ScriptGuardianStatus.BusyWarning -> getString(
+                R.string.script_guardian_status_busy_warning,
                 status.file.name
             )
 
@@ -185,7 +225,8 @@ class ScriptGuardianService : Service() {
             is ScriptGuardianStatus.Retrying -> getString(
                 R.string.script_guardian_status_retrying,
                 status.delayMillis / 1_000,
-                status.file.name
+                status.file.name,
+                status.reason.replace('\n', ' ').replace('\r', ' ').take(80)
             )
         }
         updateNotification(text)

@@ -20,13 +20,15 @@ class ScriptGuardianSupervisorTest {
     private lateinit var runner: FakeRunner
     private lateinit var waits: ManualWait
     private lateinit var supervisor: ScriptGuardianSupervisor
+    private lateinit var statuses: MutableList<ScriptGuardianStatus>
 
     @Before
     fun setUp() {
         scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
         runner = FakeRunner()
         waits = ManualWait()
-        supervisor = ScriptGuardianSupervisor(scope, runner, waits::await)
+        statuses = mutableListOf()
+        supervisor = ScriptGuardianSupervisor(scope, runner, waits::await, statuses::add)
     }
 
     @After
@@ -180,6 +182,125 @@ class ScriptGuardianSupervisorTest {
     }
 
     @Test
+    fun idleHeartbeatTimeoutStopsAndRestartsOnlyCurrentSession() = runBlocking {
+        supervisor.reconcile(A)
+        yield()
+        val sessionId = runner.starts.single().sessionId
+
+        assertTrue(
+            supervisor.reportHeartbeat(
+                heartbeat(sessionId, 1L, ScriptGuardianHeartbeatState.IDLE)
+            )
+        )
+        yield()
+        assertTrue(waits.hasPending(ScriptGuardianSupervisor.IDLE_HEARTBEAT_TIMEOUT_MILLIS))
+
+        waits.release(ScriptGuardianSupervisor.IDLE_HEARTBEAT_TIMEOUT_MILLIS)
+        yield()
+
+        assertEquals(1, runner.stopped.size)
+        assertTrue(waits.hasPending(5_000L))
+        waits.release(5_000L)
+        yield()
+        assertEquals(2, runner.startAttempts)
+        assertFalse(sessionId == runner.starts.last().sessionId)
+    }
+
+    @Test
+    fun newerIdleHeartbeatReplacesPreviousDeadline() = runBlocking {
+        supervisor.reconcile(A)
+        yield()
+        val sessionId = runner.starts.single().sessionId
+
+        supervisor.reportHeartbeat(heartbeat(sessionId, 1L, ScriptGuardianHeartbeatState.IDLE))
+        yield()
+        supervisor.reportHeartbeat(heartbeat(sessionId, 2L, ScriptGuardianHeartbeatState.IDLE))
+        yield()
+
+        assertEquals(
+            1,
+            waits.pendingCount(ScriptGuardianSupervisor.IDLE_HEARTBEAT_TIMEOUT_MILLIS)
+        )
+        assertTrue(runner.stopped.isEmpty())
+    }
+
+    @Test
+    fun wrongSessionAndOutOfOrderHeartbeatAreIgnored() = runBlocking {
+        supervisor.reconcile(A)
+        yield()
+        val sessionId = runner.starts.single().sessionId
+
+        supervisor.reportHeartbeat(
+            heartbeat("wrong-session", 1L, ScriptGuardianHeartbeatState.IDLE)
+        )
+        yield()
+        assertFalse(waits.hasPending(ScriptGuardianSupervisor.IDLE_HEARTBEAT_TIMEOUT_MILLIS))
+
+        supervisor.reportHeartbeat(heartbeat(sessionId, 2L, ScriptGuardianHeartbeatState.BUSY))
+        yield()
+        supervisor.reportHeartbeat(heartbeat(sessionId, 1L, ScriptGuardianHeartbeatState.IDLE))
+        yield()
+
+        assertFalse(waits.hasPending(ScriptGuardianSupervisor.IDLE_HEARTBEAT_TIMEOUT_MILLIS))
+        assertTrue(waits.hasPending(ScriptGuardianSupervisor.BUSY_WARNING_MILLIS))
+    }
+
+    @Test
+    fun busyHeartbeatWarnsButNeverRestarts() = runBlocking {
+        supervisor.reconcile(A)
+        yield()
+        val sessionId = runner.starts.single().sessionId
+
+        supervisor.reportHeartbeat(
+            heartbeat(
+                sessionId,
+                1L,
+                ScriptGuardianHeartbeatState.BUSY,
+                commandId = "command-1"
+            )
+        )
+        yield()
+        assertFalse(waits.hasPending(ScriptGuardianSupervisor.IDLE_HEARTBEAT_TIMEOUT_MILLIS))
+        assertTrue(waits.hasPending(ScriptGuardianSupervisor.BUSY_WARNING_MILLIS))
+
+        waits.release(ScriptGuardianSupervisor.BUSY_WARNING_MILLIS)
+        yield()
+
+        assertTrue(runner.stopped.isEmpty())
+        assertEquals(1, runner.startAttempts)
+        assertTrue(statuses.last() is ScriptGuardianStatus.BusyWarning)
+    }
+
+    @Test
+    fun returningIdleAfterBusyRearmsWatchdog() = runBlocking {
+        supervisor.reconcile(A)
+        yield()
+        val sessionId = runner.starts.single().sessionId
+
+        supervisor.reportHeartbeat(
+            heartbeat(sessionId, 1L, ScriptGuardianHeartbeatState.BUSY, "command-1")
+        )
+        yield()
+        supervisor.reportHeartbeat(heartbeat(sessionId, 2L, ScriptGuardianHeartbeatState.IDLE))
+        yield()
+
+        assertFalse(waits.hasPending(ScriptGuardianSupervisor.BUSY_WARNING_MILLIS))
+        assertTrue(waits.hasPending(ScriptGuardianSupervisor.IDLE_HEARTBEAT_TIMEOUT_MILLIS))
+    }
+
+    @Test
+    fun engineFailureReasonIsPreservedForRetry() = runBlocking {
+        supervisor.reconcile(A)
+        yield()
+
+        runner.starts.single().onFinished(IllegalStateException("receiver failed"))
+        yield()
+
+        val retry = statuses.filterIsInstance<ScriptGuardianStatus.Retrying>().last()
+        assertEquals("IllegalStateException: receiver failed", retry.reason)
+    }
+
+    @Test
     fun closeStopsCurrentExecutionAndPreventsRestart() = runBlocking {
         supervisor.reconcile(A)
         supervisor.close()
@@ -190,10 +311,18 @@ class ScriptGuardianSupervisorTest {
         assertFalse(waits.hasPending(5_000L))
     }
 
+    private fun heartbeat(
+        sessionId: String,
+        sequence: Long,
+        state: ScriptGuardianHeartbeatState,
+        commandId: String? = null
+    ) = ScriptGuardianHeartbeatReport(sessionId, sequence, state, commandId)
+
     private class FakeExecution(val id: Int) : ScriptGuardianExecution
 
     private data class StartRecord(
         val file: File,
+        val sessionId: String,
         val execution: FakeExecution,
         val onFinished: (Throwable?) -> Unit
     )
@@ -222,6 +351,7 @@ class ScriptGuardianSupervisorTest {
 
         override fun start(
             file: File,
+            sessionId: String,
             onStarted: () -> Unit,
             onFinished: (Throwable?) -> Unit
         ): ScriptGuardianExecution {
@@ -231,7 +361,7 @@ class ScriptGuardianSupervisorTest {
                 throw IllegalStateException("start failed")
             }
             val execution = FakeExecution(startAttempts)
-            starts += StartRecord(file, execution, onFinished)
+            starts += StartRecord(file, sessionId, execution, onFinished)
             onStarted()
             if (finishBeforeReturn) {
                 finishBeforeReturn = false
@@ -285,6 +415,9 @@ class ScriptGuardianSupervisorTest {
 
         fun hasPending(delayMillis: Long): Boolean =
             pending.any { it.delayMillis == delayMillis }
+
+        fun pendingCount(delayMillis: Long): Int =
+            pending.count { it.delayMillis == delayMillis }
 
         fun release(delayMillis: Long) {
             pending.first { it.delayMillis == delayMillis }.gate.complete(Unit)

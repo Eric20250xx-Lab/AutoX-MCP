@@ -65,6 +65,12 @@
             android:layout="@layout/preference_custom"
             android:summary="@string/summary_script_guardian_path"
             android:title="@string/text_script_guardian_path" />
+
+        <Preference
+            android:key="@string/key_script_guardian_background_status"
+            android:layout="@layout/preference_custom"
+            android:summary="@string/summary_script_guardian_background_status_waiting"
+            android:title="@string/text_script_guardian_background_status" />
     </PreferenceCategory>
 
     <PreferenceCategory

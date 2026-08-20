@@ -28,6 +28,7 @@ import org.autojs.autojs.autojs.key.GlobalKeyObserver
 import org.autojs.autojs.external.receiver.DynamicBroadcastReceivers
 import org.autojs.autojs.guardian.ScriptGuardianExecutionGuard
 import org.autojs.autojs.guardian.ScriptGuardianPreferenceBridge
+import org.autojs.autojs.guardian.ScriptGuardianStartupRestorer
 import org.autojs.autojs.theme.ThemeColorManagerCompat
 import org.autojs.autojs.timing.TimedTaskManager
 import org.autojs.autojs.timing.TimedTaskScheduler
@@ -91,6 +92,11 @@ class App : Application(), Configuration.Provider {
             ScriptGuardianExecutionGuard.install(this)
             mcpPreferenceBridge = McpPreferenceBridge(this).apply { start() }
             scriptGuardianPreferenceBridge = ScriptGuardianPreferenceBridge(this).apply { start() }
+            runCatching {
+                ScriptGuardianStartupRestorer(this).restoreIfEnabled()
+            }.onFailure { error ->
+                Log.w(TAG, "Could not restore Script Guardian during main process start", error)
+            }
             EngineController.scope.launch {
                 delay(1000)
                 ShizukuProvider.requestBinderForNonProviderProcess(this@App)

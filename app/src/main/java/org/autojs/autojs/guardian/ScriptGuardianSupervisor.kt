@@ -7,6 +7,7 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.io.File
+import java.util.UUID
 import kotlin.math.min
 
 internal interface ScriptGuardianExecution
@@ -16,6 +17,7 @@ internal interface ScriptGuardianRunner {
 
     fun start(
         file: File,
+        sessionId: String,
         onStarted: () -> Unit,
         onFinished: (Throwable?) -> Unit
     ): ScriptGuardianExecution
@@ -44,7 +46,11 @@ internal interface ScriptGuardianRunner {
 internal sealed interface ScriptGuardianStatus {
     data object Disabled : ScriptGuardianStatus
     data class Starting(val file: File) : ScriptGuardianStatus
-    data class Running(val file: File) : ScriptGuardianStatus
+    data class Running(
+        val file: File,
+        val heartbeat: ScriptGuardianHeartbeatReport? = null
+    ) : ScriptGuardianStatus
+    data class BusyWarning(val file: File, val commandId: String) : ScriptGuardianStatus
     data class Stopping(val file: File) : ScriptGuardianStatus
     data class Retrying(val file: File, val delayMillis: Long, val reason: String) :
         ScriptGuardianStatus
@@ -66,15 +72,23 @@ internal class ScriptGuardianSupervisor(
         val id: Long,
         val generation: Long,
         val file: File,
+        val sessionId: String,
         val execution: ScriptGuardianExecution
     )
 
-    private data class StoppingSlot(val slot: Slot, val unexpected: Boolean)
+    private data class StoppingSlot(
+        val slot: Slot,
+        val unexpected: Boolean,
+        val retryReason: String? = null
+    )
 
     private sealed interface Command {
         data class Apply(val file: File?) : Command
         data class Started(val slotId: Long) : Command
-        data class Finished(val slotId: Long) : Command
+        data class Finished(val slotId: Long, val error: Throwable?) : Command
+        data class Heartbeat(val report: ScriptGuardianHeartbeatReport) : Command
+        data class HeartbeatExpired(val slotId: Long, val sequence: Long) : Command
+        data class BusyWarning(val slotId: Long, val sequence: Long) : Command
         data class TakeoverCompleted(
             val generation: Long,
             val success: Boolean,
@@ -104,6 +118,9 @@ internal class ScriptGuardianSupervisor(
     private var stopJob: Job? = null
     private var retryJob: Job? = null
     private var healthyJob: Job? = null
+    private var heartbeatJob: Job? = null
+    private var busyWarningJob: Job? = null
+    private var heartbeatState: ScriptGuardianHeartbeatReport? = null
     private var backoffIndex = 0
     private var closing: CompletableDeferred<Unit>? = null
 
@@ -113,6 +130,9 @@ internal class ScriptGuardianSupervisor(
     fun reconcile(file: File?) {
         commands.trySend(Command.Apply(file?.canonicalFile))
     }
+
+    fun reportHeartbeat(report: ScriptGuardianHeartbeatReport): Boolean =
+        commands.trySend(Command.Heartbeat(report)).isSuccess
 
     suspend fun close() {
         val completed = CompletableDeferred<Unit>()
@@ -124,6 +144,8 @@ internal class ScriptGuardianSupervisor(
     fun closeNow() {
         retryJob?.cancel()
         healthyJob?.cancel()
+        heartbeatJob?.cancel()
+        busyWarningJob?.cancel()
         takeoverJob?.cancel()
         stopJob?.cancel()
         currentExecution?.let { execution ->
@@ -143,6 +165,9 @@ internal class ScriptGuardianSupervisor(
             }
 
             is Command.Finished -> executionFinished(command)
+            is Command.Heartbeat -> heartbeat(command.report)
+            is Command.HeartbeatExpired -> heartbeatExpired(command)
+            is Command.BusyWarning -> busyWarning(command)
             is Command.TakeoverCompleted -> takeoverCompleted(command)
             is Command.StopCompleted -> stopCompleted(command)
             is Command.RetryStop -> retryStop(command.slotId)
@@ -174,6 +199,7 @@ internal class ScriptGuardianSupervisor(
         retryJob = null
         healthyJob?.cancel()
         healthyJob = null
+        clearHeartbeatState()
 
         active?.let {
             beginStop(it, unexpected = false)
@@ -237,13 +263,15 @@ internal class ScriptGuardianSupervisor(
         if (desired != target || closing != null) return
         onStatus(ScriptGuardianStatus.Starting(target.file))
         val slotId = ++nextSlotId
+        val sessionId = UUID.randomUUID().toString()
         try {
             val execution = runner.start(
                 target.file,
+                sessionId,
                 onStarted = { commands.trySend(Command.Started(slotId)) },
-                onFinished = { commands.trySend(Command.Finished(slotId)) }
+                onFinished = { error -> commands.trySend(Command.Finished(slotId, error)) }
             )
-            val slot = Slot(slotId, target.generation, target.file, execution)
+            val slot = Slot(slotId, target.generation, target.file, sessionId, execution)
             active = slot
             currentExecution = execution
             onStatus(ScriptGuardianStatus.Running(target.file))
@@ -262,7 +290,9 @@ internal class ScriptGuardianSupervisor(
         active = null
         healthyJob?.cancel()
         healthyJob = null
-        stopping = StoppingSlot(slot, unexpected = true)
+        val reason = command.error?.let(::describeError) ?: "script exited"
+        clearHeartbeatState()
+        stopping = StoppingSlot(slot, unexpected = true, retryReason = reason)
         onStatus(ScriptGuardianStatus.Stopping(slot.file))
         stopJob = scope.launch {
             val success = runCatching { runner.awaitStopped(slot.execution) }.getOrDefault(false)
@@ -270,11 +300,12 @@ internal class ScriptGuardianSupervisor(
         }
     }
 
-    private fun beginStop(slot: Slot, unexpected: Boolean) {
+    private fun beginStop(slot: Slot, unexpected: Boolean, retryReason: String? = null) {
         if (active?.id == slot.id) active = null
         healthyJob?.cancel()
         healthyJob = null
-        stopping = StoppingSlot(slot, unexpected)
+        clearHeartbeatState()
+        stopping = StoppingSlot(slot, unexpected, retryReason)
         currentExecution = slot.execution
         onStatus(ScriptGuardianStatus.Stopping(slot.file))
         stopJob = scope.launch {
@@ -301,7 +332,7 @@ internal class ScriptGuardianSupervisor(
         if (stopped.unexpected && target?.generation == stopped.slot.generation &&
             target.file == stopped.slot.file
         ) {
-            scheduleRetry(target, "script exited")
+            scheduleRetry(target, stopped.retryReason ?: "script exited")
         } else {
             reconcileCurrent()
         }
@@ -348,6 +379,7 @@ internal class ScriptGuardianSupervisor(
         retryJob = null
         healthyJob?.cancel()
         healthyJob = null
+        clearHeartbeatState()
         active?.let {
             beginStop(it, unexpected = false)
             return
@@ -363,9 +395,78 @@ internal class ScriptGuardianSupervisor(
         commands.close()
     }
 
+    private fun heartbeat(report: ScriptGuardianHeartbeatReport) {
+        val slot = active?.takeIf { it.sessionId == report.sessionId } ?: return
+        val previous = heartbeatState
+        if (previous != null && report.sequence <= previous.sequence) return
+
+        heartbeatState = report
+        heartbeatJob?.cancel()
+        heartbeatJob = null
+        busyWarningJob?.cancel()
+        busyWarningJob = null
+        onStatus(ScriptGuardianStatus.Running(slot.file, report))
+        when (report.state) {
+            ScriptGuardianHeartbeatState.IDLE -> {
+                heartbeatJob = scope.launch {
+                    wait(IDLE_HEARTBEAT_TIMEOUT_MILLIS)
+                    commands.send(Command.HeartbeatExpired(slot.id, report.sequence))
+                }
+            }
+
+            ScriptGuardianHeartbeatState.BUSY -> {
+                busyWarningJob = scope.launch {
+                    wait(BUSY_WARNING_MILLIS)
+                    commands.send(Command.BusyWarning(slot.id, report.sequence))
+                }
+            }
+        }
+    }
+
+    private fun heartbeatExpired(command: Command.HeartbeatExpired) {
+        heartbeatJob = null
+        val report = heartbeatState?.takeIf {
+            it.sequence == command.sequence && it.state == ScriptGuardianHeartbeatState.IDLE
+        } ?: return
+        val slot = active?.takeIf {
+            it.id == command.slotId && it.sessionId == report.sessionId
+        } ?: return
+        beginStop(
+            slot,
+            unexpected = true,
+            retryReason = "idle heartbeat timed out after ${IDLE_HEARTBEAT_TIMEOUT_MILLIS / 1_000}s"
+        )
+    }
+
+    private fun busyWarning(command: Command.BusyWarning) {
+        busyWarningJob = null
+        val report = heartbeatState?.takeIf {
+            it.sequence == command.sequence && it.state == ScriptGuardianHeartbeatState.BUSY
+        } ?: return
+        val slot = active?.takeIf {
+            it.id == command.slotId && it.sessionId == report.sessionId
+        } ?: return
+        onStatus(ScriptGuardianStatus.BusyWarning(slot.file, report.commandId.orEmpty()))
+    }
+
+    private fun clearHeartbeatState() {
+        heartbeatJob?.cancel()
+        heartbeatJob = null
+        busyWarningJob?.cancel()
+        busyWarningJob = null
+        heartbeatState = null
+    }
+
+    private fun describeError(error: Throwable): String =
+        error.message?.takeIf { it.isNotBlank() }
+            ?.let { "${error.javaClass.simpleName}: $it" }
+            ?: error.javaClass.simpleName
+
     companion object {
         private val BACKOFF_MILLIS = longArrayOf(5_000L, 10_000L, 20_000L, 40_000L, 60_000L)
         private const val HEALTHY_RESET_MILLIS = 120_000L
         private const val STOP_RETRY_MILLIS = 5_000L
+        internal const val IDLE_HEARTBEAT_TIMEOUT_MILLIS = 45_000L
+        internal const val BUSY_WARNING_MILLIS = 300_000L
     }
 }
