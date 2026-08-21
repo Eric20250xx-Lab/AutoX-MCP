@@ -4,6 +4,7 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
@@ -107,6 +108,110 @@ class ScriptGuardianWakeLockLeaseTest {
     }
 
     @Test
+    fun refreshNowWhileRunningImmediatelyReplacesCurrentLease() = runBlocking {
+        val events = mutableListOf<String>()
+        val first = FakeWakeLock("first", events)
+        val second = FakeWakeLock("second", events)
+        val handles = ArrayDeque(listOf(first, second))
+        val lease = ScriptGuardianWakeLockLease(
+            scope,
+            ScriptGuardianWakeLockFactory { handles.removeFirst() },
+            waits::await
+        )
+
+        lease.start()
+        yield()
+
+        assertTrue(lease.refreshNow())
+        assertEquals(
+            listOf(
+                "first:acquire:600000",
+                "second:acquire:600000",
+                "first:release"
+            ),
+            events
+        )
+        assertTrue(second.isHeld)
+        assertTrue(waits.hasPending(ScriptGuardianWakeLockLease.RENEW_MILLIS))
+
+        lease.stop()
+        assertEquals("second:release", events.last())
+    }
+
+    @Test
+    fun refreshNowWhileStoppedDoesNotCreateOrAcquireALock() {
+        var createCount = 0
+        val lease = ScriptGuardianWakeLockLease(
+            scope,
+            ScriptGuardianWakeLockFactory {
+                createCount += 1
+                FakeWakeLock("unused", mutableListOf())
+            },
+            waits::await
+        )
+
+        assertFalse(lease.refreshNow())
+        assertEquals(0, createCount)
+        assertFalse(lease.isHeld())
+    }
+
+    @Test
+    fun stopRejectsARefreshThatFinishesAcquiringAfterStop() = runBlocking {
+        val backgroundJob = SupervisorJob()
+        val backgroundScope = CoroutineScope(backgroundJob + Dispatchers.Default)
+        val acquireStarted = CountDownLatch(1)
+        val allowAcquire = CountDownLatch(1)
+        val events = CopyOnWriteArrayList<String>()
+        val heldEvents = CopyOnWriteArrayList<Boolean>()
+        val first = FakeWakeLock("first", events)
+        val replacement = BlockingAcquireWakeLock(
+            "replacement",
+            events,
+            acquireStarted,
+            allowAcquire
+        )
+        val lease = ScriptGuardianWakeLockLease(
+            backgroundScope,
+            ScriptGuardianWakeLockFactory { first },
+            wait = { CompletableDeferred<Unit>().await() },
+            onHeldChanged = heldEvents::add
+        )
+
+        try {
+            lease.start()
+            withTimeout(5_000L) {
+                while (!lease.isHeld()) yield()
+            }
+
+            val refreshResult = async(Dispatchers.Default) {
+                lease.refreshNow(ScriptGuardianWakeLockFactory { replacement })
+            }
+            assertTrue(acquireStarted.await(5L, TimeUnit.SECONDS))
+
+            lease.stop()
+            assertFalse(lease.isHeld())
+
+            allowAcquire.countDown()
+            assertFalse(withTimeout(5_000L) { refreshResult.await() })
+            assertEquals(
+                listOf(
+                    "first:acquire:600000",
+                    "replacement:acquire:600000",
+                    "first:release",
+                    "replacement:release"
+                ),
+                events.toList()
+            )
+            assertEquals(listOf(true, false), heldEvents.toList())
+            assertFalse(lease.isHeld())
+        } finally {
+            allowAcquire.countDown()
+            lease.stop()
+            backgroundScope.cancel()
+        }
+    }
+
+    @Test
     fun stopPreventsInFlightRenewalFromPublishingHeldAgain() = runBlocking {
         val backgroundJob = SupervisorJob()
         val backgroundScope = CoroutineScope(backgroundJob + Dispatchers.Default)
@@ -193,6 +298,29 @@ class ScriptGuardianWakeLockLeaseTest {
             events += "$name:release"
             releaseStarted.countDown()
             allowRelease.await()
+            isHeld = false
+        }
+    }
+
+    private class BlockingAcquireWakeLock(
+        private val name: String,
+        private val events: MutableList<String>,
+        private val acquireStarted: CountDownLatch,
+        private val allowAcquire: CountDownLatch
+    ) : ScriptGuardianWakeLockHandle {
+        @Volatile
+        override var isHeld = false
+            private set
+
+        override fun acquire(timeoutMillis: Long) {
+            events += "$name:acquire:$timeoutMillis"
+            acquireStarted.countDown()
+            allowAcquire.await()
+            isHeld = true
+        }
+
+        override fun release() {
+            events += "$name:release"
             isHeld = false
         }
     }

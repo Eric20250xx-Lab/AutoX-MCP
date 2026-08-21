@@ -28,6 +28,7 @@ import org.autojs.autojs.autojs.key.GlobalKeyObserver
 import org.autojs.autojs.external.receiver.DynamicBroadcastReceivers
 import org.autojs.autojs.guardian.ScriptGuardianExecutionGuard
 import org.autojs.autojs.guardian.ScriptGuardianPreferenceBridge
+import org.autojs.autojs.guardian.ScriptGuardianPrewarmScheduler
 import org.autojs.autojs.guardian.ScriptGuardianStartupRestorer
 import org.autojs.autojs.theme.ThemeColorManagerCompat
 import org.autojs.autojs.timing.TimedTaskManager
@@ -96,6 +97,11 @@ class App : Application(), Configuration.Provider {
                 ScriptGuardianStartupRestorer(this).restoreIfEnabled()
             }.onFailure { error ->
                 Log.w(TAG, "Could not restore Script Guardian during main process start", error)
+            }
+            runCatching {
+                ScriptGuardianPrewarmScheduler.reconcile(this, "main_process_start")
+            }.onFailure { error ->
+                Log.w(TAG, "Could not schedule Script Guardian prewarm", error)
             }
             EngineController.scope.launch {
                 delay(1000)

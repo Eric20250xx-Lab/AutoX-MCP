@@ -165,6 +165,17 @@
     <string name="summary_script_guardian_enable">自动启动指定脚本，并在脚本退出后重新运行</string>
     <string name="text_script_guardian_path">守护脚本路径</string>
     <string name="summary_script_guardian_path">相对于 AutoX 脚本目录的路径，例如：receiver.js</string>
+    <string name="text_script_guardian_keep_screen_on_while_charging">插电时保持屏幕常亮</string>
+    <string name="summary_script_guardian_keep_screen_on_while_charging">守护脚本有效且设备插电时保持屏幕常亮；意外熄屏后尝试重新点亮，不会解锁设备。自动点亮后 10 秒内再次熄屏会暂停本次 Guardian 运行期间的补救；重新插拔电源、关闭后再打开此设置或 Guardian 重启后可恢复</string>
+    <string name="text_script_guardian_prewarm_enable">定时预热脚本守护</string>
+    <string name="summary_script_guardian_prewarm_disabled">关闭；只恢复 Guardian，不执行任何业务操作</string>
+    <string name="summary_script_guardian_prewarm_scheduled">每天 %1$s；下次唤醒 %2$s</string>
+    <string name="summary_script_guardian_prewarm_permission_required">每天 %1$s；需要“闹钟和提醒”权限，关闭后重新开启可再次授权</string>
+    <string name="summary_script_guardian_prewarm_invalid">时间格式无效，请使用 HH:mm 并以逗号分隔</string>
+    <string name="summary_script_guardian_prewarm_error">无法安排下次唤醒：%1$s</string>
+    <string name="text_script_guardian_prewarm_times">每日预热时间</string>
+    <string name="summary_script_guardian_prewarm_times">上海时间，多个时间以逗号分隔；只唤醒 Guardian</string>
+    <string name="script_guardian_prewarm_invalid_input">请输入有效时间，例如 08:15,17:45</string>
     <string name="text_script_guardian_background_status">后台保活准备</string>
     <string name="summary_script_guardian_background_status_waiting">正在读取后台保活状态</string>
     <string name="summary_script_guardian_background_status">%1$s · Guardian %2$s · %3$s%4$s。realme 自启动和后台活动仍需在系统设置中确认</string>

@@ -130,6 +130,17 @@
   <string name="summary_script_guardian_enable">Automatically start the configured script and restart it after it exits</string>
   <string name="text_script_guardian_path">Guardian script path</string>
   <string name="summary_script_guardian_path">Path relative to the AutoX script directory, for example: receiver.js</string>
+  <string name="text_script_guardian_keep_screen_on_while_charging">Keep screen on while charging</string>
+  <string name="summary_script_guardian_keep_screen_on_while_charging">Keeps the screen on while a valid guarded script is running and the device is plugged in; if the screen turns off, it tries to turn it back on without unlocking. Turning it off again within 10 seconds pauses recovery for the current Guardian run; reconnecting power, turning this setting off and on, or restarting Guardian restores recovery</string>
+  <string name="text_script_guardian_prewarm_enable">Schedule Guardian prewarm</string>
+  <string name="summary_script_guardian_prewarm_disabled">Off; prewarm only restores Guardian and never runs a business action</string>
+  <string name="summary_script_guardian_prewarm_scheduled">Daily at %1$s; next wake %2$s</string>
+  <string name="summary_script_guardian_prewarm_permission_required">Daily at %1$s; Alarms &amp; reminders access required; turn this off and on to request access again</string>
+  <string name="summary_script_guardian_prewarm_invalid">Invalid time format; use HH:mm separated by commas</string>
+  <string name="summary_script_guardian_prewarm_error">Could not schedule the next wake: %1$s</string>
+  <string name="text_script_guardian_prewarm_times">Daily prewarm times</string>
+  <string name="summary_script_guardian_prewarm_times">Asia/Shanghai time, separated by commas; wakes Guardian only</string>
+  <string name="script_guardian_prewarm_invalid_input">Enter valid times, for example 08:15,17:45</string>
   <string name="text_script_guardian_background_status">Background readiness</string>
   <string name="summary_script_guardian_background_status_waiting">Reading background readiness</string>
   <string name="summary_script_guardian_background_status">%1$s · Guardian %2$s · %3$s%4$s. realme auto-launch and background activity still require confirmation in system settings</string>

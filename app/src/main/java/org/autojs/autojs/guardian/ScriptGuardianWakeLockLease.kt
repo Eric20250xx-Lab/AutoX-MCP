@@ -45,7 +45,7 @@ internal class ScriptGuardianWakeLockLease(
                 while (isActive && running) {
                     if (nextDelay > 0L) wait(nextDelay)
                     if (!isActive || !running) break
-                    nextDelay = if (renew(runGeneration)) {
+                    nextDelay = if (renew(runGeneration, factory)) {
                         RENEW_MILLIS
                     } else {
                         FAILURE_RETRY_MILLIS
@@ -77,13 +77,24 @@ internal class ScriptGuardianWakeLockLease(
         }
     }
 
+    fun refreshNow(factoryOverride: ScriptGuardianWakeLockFactory? = null): Boolean {
+        val runGeneration = synchronized(lock) {
+            if (!running) return false
+            generation
+        }
+        return renew(runGeneration, factoryOverride ?: factory)
+    }
+
     internal fun isHeld(): Boolean = synchronized(lock) {
         current?.isHeld == true
     }
 
-    private fun renew(runGeneration: Long): Boolean {
+    private fun renew(
+        runGeneration: Long,
+        renewalFactory: ScriptGuardianWakeLockFactory
+    ): Boolean {
         val replacement = try {
-            factory.create().also { it.acquire(LEASE_MILLIS) }
+            renewalFactory.create().also { it.acquire(LEASE_MILLIS) }
         } catch (error: Throwable) {
             runCatching { onFailure(error) }
             synchronized(lock) {
@@ -135,13 +146,17 @@ internal class ScriptGuardianWakeLockLease(
         internal const val RENEW_MILLIS = 300_000L
         internal const val FAILURE_RETRY_MILLIS = 30_000L
 
-        fun androidFactory(context: Context): ScriptGuardianWakeLockFactory {
+        fun androidFactory(
+            context: Context,
+            levelAndFlags: Int = PowerManager.PARTIAL_WAKE_LOCK,
+            tag: String = "${context.packageName}:ScriptGuardian"
+        ): ScriptGuardianWakeLockFactory {
             val appContext = context.applicationContext
             val powerManager = appContext.getSystemService(PowerManager::class.java)
             return ScriptGuardianWakeLockFactory {
                 val wakeLock = powerManager.newWakeLock(
-                    PowerManager.PARTIAL_WAKE_LOCK,
-                    "${appContext.packageName}:ScriptGuardian"
+                    levelAndFlags,
+                    tag
                 ).apply {
                     setReferenceCounted(false)
                 }
