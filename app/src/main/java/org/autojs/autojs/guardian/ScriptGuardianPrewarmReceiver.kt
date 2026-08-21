@@ -11,15 +11,24 @@ class ScriptGuardianPrewarmReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         if (!shouldHandleScriptGuardianPrewarm(intent.action)) return
 
-        ScriptGuardianPrewarmScheduler.recordReceived(context)
-        ScriptGuardianService.restore(context)
-        ScriptGuardianPrewarmScheduler.reconcileAfterReceipt(
-            context = context,
-            action = intent.action,
-            scheduledAtMillis = intent.getLongExtra(
-                ScriptGuardianPrewarmScheduler.EXTRA_SCHEDULED_AT,
-                0L
-            )
+        val scheduledAtMillis = intent.getLongExtra(
+            ScriptGuardianPrewarmScheduler.EXTRA_SCHEDULED_AT,
+            0L
         )
+        val flow = ScriptGuardianPrewarmScheduler.recordReceived(
+            context = context,
+            scheduledAtMillis = scheduledAtMillis,
+            kind = ScriptGuardianPrewarmScheduler.RECEIPT_KIND_ALARM
+        )
+        if (flow.shouldRestore) {
+            ScriptGuardianService.restore(context)
+        }
+        if (flow.shouldReconcile) {
+            ScriptGuardianPrewarmScheduler.reconcileAfterReceipt(
+                context = context,
+                action = intent.action,
+                scheduledAtMillis = scheduledAtMillis
+            )
+        }
     }
 }

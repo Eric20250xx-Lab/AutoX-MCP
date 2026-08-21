@@ -21,6 +21,8 @@ internal data class ScriptGuardianPrewarmSnapshot(
     val nextTriggerAtMillis: Long = 0L,
     val lastScheduledAtMillis: Long = 0L,
     val lastReceivedAtMillis: Long = 0L,
+    val lastReceivedScheduledAtMillis: Long = 0L,
+    val lastReceiptKind: String = "",
     val lastRebuildAction: String = "",
     val lastRebuildAtMillis: Long = 0L
 ) {
@@ -39,6 +41,11 @@ internal data class ScriptGuardianPrewarmSnapshot(
 internal data class ScriptGuardianPrewarmPlan(
     val state: String,
     val nextTriggerAtMillis: Long = 0L
+)
+
+internal data class ScriptGuardianPrewarmReceiverFlow(
+    val shouldRestore: Boolean,
+    val shouldReconcile: Boolean
 )
 
 internal val SCRIPT_GUARDIAN_PREWARM_ZONE_ID: ZoneId = ZoneId.of("Asia/Shanghai")
@@ -127,10 +134,50 @@ internal fun scriptGuardianPrewarmRescheduleBase(
     return maxOf(nowMillis, afterScheduled)
 }
 
+internal fun shouldReceiveScriptGuardianPrewarmOccurrence(
+    previous: ScriptGuardianPrewarmSnapshot,
+    scheduledAtMillis: Long
+): Boolean = scheduledAtMillis > 0L &&
+    scheduledAtMillis > previous.lastReceivedScheduledAtMillis
+
+internal fun scriptGuardianPrewarmReceiverFlow(
+    previous: ScriptGuardianPrewarmSnapshot,
+    scheduledAtMillis: Long
+): ScriptGuardianPrewarmReceiverFlow = ScriptGuardianPrewarmReceiverFlow(
+    shouldRestore = shouldReceiveScriptGuardianPrewarmOccurrence(
+        previous,
+        scheduledAtMillis
+    ),
+    shouldReconcile = true
+)
+
+internal fun scriptGuardianPrewarmCatchUpScheduledAt(
+    previous: ScriptGuardianPrewarmSnapshot,
+    prewarmEnabled: Boolean,
+    guardianEnabled: Boolean,
+    nowMillis: Long
+): Long {
+    val scheduledAtMillis = previous.nextTriggerAtMillis
+    return if (
+        prewarmEnabled &&
+        guardianEnabled &&
+        scheduledAtMillis > 0L &&
+        scheduledAtMillis <= nowMillis &&
+        shouldReceiveScriptGuardianPrewarmOccurrence(previous, scheduledAtMillis)
+    ) {
+        scheduledAtMillis
+    } else {
+        0L
+    }
+}
+
 internal object ScriptGuardianPrewarmScheduler {
     const val ACTION_PREWARM = "org.autojs.autojs.guardian.action.PREWARM"
     internal const val EXTRA_SCHEDULED_AT = "scheduled_at"
+    internal const val RECEIPT_KIND_ALARM = "ALARM"
+    internal const val RECEIPT_KIND_CATCH_UP = "CATCH_UP"
 
+    @Synchronized
     fun reconcile(
         context: Context,
         action: String? = null
@@ -140,6 +187,7 @@ internal object ScriptGuardianPrewarmScheduler {
         schedulingBaseMillis = System.currentTimeMillis()
     )
 
+    @Synchronized
     internal fun reconcileAfterReceipt(
         context: Context,
         action: String?,
@@ -169,6 +217,23 @@ internal object ScriptGuardianPrewarmScheduler {
             ScriptGuardianPrewarmPrefs.KEY_TIMES,
             ScriptGuardianPrewarmPrefs.DEFAULT_TIMES
         ).orEmpty()
+
+        var previous = snapshot(appContext)
+        val catchUpScheduledAtMillis = scriptGuardianPrewarmCatchUpScheduledAt(
+            previous = previous,
+            prewarmEnabled = prewarmEnabled,
+            guardianEnabled = guardianEnabled,
+            nowMillis = now
+        )
+        if (catchUpScheduledAtMillis > 0L) {
+            previous = previous.withReceipt(
+                receivedAtMillis = now,
+                scheduledAtMillis = catchUpScheduledAtMillis,
+                kind = RECEIPT_KIND_CATCH_UP
+            )
+            writeSnapshot(appContext, previous)
+            ScriptGuardianService.restore(appContext)
+        }
 
         val plan = if (alarmManager == null && prewarmEnabled && guardianEnabled) {
             ScriptGuardianPrewarmPlan(ScriptGuardianPrewarmSnapshot.STATE_ERROR)
@@ -206,7 +271,6 @@ internal object ScriptGuardianPrewarmScheduler {
             alarmManager?.cancel(pendingIntent(appContext, 0L))
         }
 
-        val previous = snapshot(appContext)
         val next = previous.copy(
             state = finalPlan.state,
             nextTriggerAtMillis = finalPlan.nextTriggerAtMillis,
@@ -239,20 +303,33 @@ internal object ScriptGuardianPrewarmScheduler {
             nextTriggerAtMillis = prefs.getLong(KEY_NEXT_TRIGGER_AT, 0L),
             lastScheduledAtMillis = prefs.getLong(KEY_LAST_SCHEDULED_AT, 0L),
             lastReceivedAtMillis = prefs.getLong(KEY_LAST_RECEIVED_AT, 0L),
+            lastReceivedScheduledAtMillis = prefs.getLong(
+                KEY_LAST_RECEIVED_SCHEDULED_AT,
+                0L
+            ),
+            lastReceiptKind = prefs.getString(KEY_LAST_RECEIPT_KIND, "").orEmpty(),
             lastRebuildAction = prefs.getString(KEY_LAST_REBUILD_ACTION, "").orEmpty(),
             lastRebuildAtMillis = prefs.getLong(KEY_LAST_REBUILD_AT, 0L)
         )
     }
 
-    internal fun recordReceived(context: Context, receivedAtMillis: Long = System.currentTimeMillis()) {
+    @Synchronized
+    internal fun recordReceived(
+        context: Context,
+        scheduledAtMillis: Long,
+        kind: String,
+        receivedAtMillis: Long = System.currentTimeMillis()
+    ): ScriptGuardianPrewarmReceiverFlow {
         val appContext = context.applicationContext
-        writeSnapshot(
-            appContext,
-            snapshot(appContext).copy(
-                nextTriggerAtMillis = 0L,
-                lastReceivedAtMillis = receivedAtMillis
+        val previous = snapshot(appContext)
+        val flow = scriptGuardianPrewarmReceiverFlow(previous, scheduledAtMillis)
+        if (flow.shouldRestore) {
+            writeSnapshot(
+                appContext,
+                previous.withReceipt(receivedAtMillis, scheduledAtMillis, kind)
             )
-        )
+        }
+        return flow
     }
 
     private fun canScheduleExactAlarms(alarmManager: AlarmManager): Boolean =
@@ -281,6 +358,11 @@ internal object ScriptGuardianPrewarmScheduler {
             .putLong(KEY_NEXT_TRIGGER_AT, snapshot.nextTriggerAtMillis)
             .putLong(KEY_LAST_SCHEDULED_AT, snapshot.lastScheduledAtMillis)
             .putLong(KEY_LAST_RECEIVED_AT, snapshot.lastReceivedAtMillis)
+            .putLong(
+                KEY_LAST_RECEIVED_SCHEDULED_AT,
+                snapshot.lastReceivedScheduledAtMillis
+            )
+            .putString(KEY_LAST_RECEIPT_KIND, snapshot.lastReceiptKind)
             .putString(KEY_LAST_REBUILD_ACTION, snapshot.lastRebuildAction)
             .putLong(KEY_LAST_REBUILD_AT, snapshot.lastRebuildAtMillis)
             .commit()
@@ -292,9 +374,21 @@ internal object ScriptGuardianPrewarmScheduler {
     private const val KEY_NEXT_TRIGGER_AT = "next_trigger_at"
     private const val KEY_LAST_SCHEDULED_AT = "last_scheduled_at"
     private const val KEY_LAST_RECEIVED_AT = "last_received_at"
+    private const val KEY_LAST_RECEIVED_SCHEDULED_AT = "last_received_scheduled_at"
+    private const val KEY_LAST_RECEIPT_KIND = "last_receipt_kind"
     private const val KEY_LAST_REBUILD_ACTION = "last_rebuild_action"
     private const val KEY_LAST_REBUILD_AT = "last_rebuild_at"
 }
+
+private fun ScriptGuardianPrewarmSnapshot.withReceipt(
+    receivedAtMillis: Long,
+    scheduledAtMillis: Long,
+    kind: String
+): ScriptGuardianPrewarmSnapshot = copy(
+    lastReceivedAtMillis = receivedAtMillis,
+    lastReceivedScheduledAtMillis = scheduledAtMillis,
+    lastReceiptKind = kind
+)
 
 private val PREWARM_TIME_SEPARATOR = Regex("[,，;；\\s]+")
 private val PREWARM_TIME_PATTERN = Regex("([01]\\d|2[0-3])[:.]([0-5]\\d)")

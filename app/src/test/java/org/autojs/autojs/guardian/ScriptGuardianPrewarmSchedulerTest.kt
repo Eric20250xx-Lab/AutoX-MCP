@@ -146,6 +146,123 @@ class ScriptGuardianPrewarmSchedulerTest {
     }
 
     @Test
+    fun receiverProcessesOnlyANewerScheduledOccurrence() {
+        val first = timestamp(2026, 8, 20, 8, 15)
+        val second = timestamp(2026, 8, 20, 17, 45)
+        val receivedFirst = ScriptGuardianPrewarmSnapshot(
+            lastReceivedScheduledAtMillis = first
+        )
+
+        assertTrue(
+            shouldReceiveScriptGuardianPrewarmOccurrence(
+                ScriptGuardianPrewarmSnapshot(),
+                first
+            )
+        )
+        assertFalse(shouldReceiveScriptGuardianPrewarmOccurrence(receivedFirst, first))
+        assertFalse(
+            shouldReceiveScriptGuardianPrewarmOccurrence(
+                receivedFirst,
+                first - 1L
+            )
+        )
+        assertTrue(shouldReceiveScriptGuardianPrewarmOccurrence(receivedFirst, second))
+    }
+
+    @Test
+    fun duplicateReceiverStillReconcilesAfterReceiptWasPersistedBeforeReschedule() {
+        val scheduledAt = timestamp(2026, 8, 20, 17, 45)
+        val previous = ScriptGuardianPrewarmSnapshot(
+            nextTriggerAtMillis = scheduledAt,
+            lastReceivedScheduledAtMillis = scheduledAt
+        )
+
+        val flow = scriptGuardianPrewarmReceiverFlow(previous, scheduledAt)
+
+        assertFalse(flow.shouldRestore)
+        assertTrue(flow.shouldReconcile)
+        assertEquals(
+            0L,
+            scriptGuardianPrewarmCatchUpScheduledAt(
+                previous = previous,
+                prewarmEnabled = true,
+                guardianEnabled = true,
+                nowMillis = scheduledAt + 1L
+            )
+        )
+    }
+
+    @Test
+    fun settingsRebuildCatchesUpAnOverdueUnreceivedOccurrence() {
+        val scheduledAt = timestamp(2026, 8, 20, 17, 45)
+        val previous = ScriptGuardianPrewarmSnapshot(nextTriggerAtMillis = scheduledAt)
+
+        assertEquals(
+            scheduledAt,
+            scriptGuardianPrewarmCatchUpScheduledAt(
+                previous = previous,
+                prewarmEnabled = true,
+                guardianEnabled = true,
+                nowMillis = scheduledAt + 6 * 60_000L
+            )
+        )
+    }
+
+    @Test
+    fun settingsRebuildDoesNotCatchUpBeforeDueTimeOrAfterReceipt() {
+        val scheduledAt = timestamp(2026, 8, 20, 17, 45)
+
+        assertEquals(
+            0L,
+            scriptGuardianPrewarmCatchUpScheduledAt(
+                previous = ScriptGuardianPrewarmSnapshot(
+                    nextTriggerAtMillis = scheduledAt
+                ),
+                prewarmEnabled = true,
+                guardianEnabled = true,
+                nowMillis = scheduledAt - 1L
+            )
+        )
+        assertEquals(
+            0L,
+            scriptGuardianPrewarmCatchUpScheduledAt(
+                previous = ScriptGuardianPrewarmSnapshot(
+                    nextTriggerAtMillis = scheduledAt,
+                    lastReceivedScheduledAtMillis = scheduledAt
+                ),
+                prewarmEnabled = true,
+                guardianEnabled = true,
+                nowMillis = scheduledAt + 1L
+            )
+        )
+    }
+
+    @Test
+    fun disabledPrewarmOrGuardianNeverCatchesUp() {
+        val scheduledAt = timestamp(2026, 8, 20, 17, 45)
+        val previous = ScriptGuardianPrewarmSnapshot(nextTriggerAtMillis = scheduledAt)
+
+        assertEquals(
+            0L,
+            scriptGuardianPrewarmCatchUpScheduledAt(
+                previous,
+                prewarmEnabled = false,
+                guardianEnabled = true,
+                nowMillis = scheduledAt + 1L
+            )
+        )
+        assertEquals(
+            0L,
+            scriptGuardianPrewarmCatchUpScheduledAt(
+                previous,
+                prewarmEnabled = true,
+                guardianEnabled = false,
+                nowMillis = scheduledAt + 1L
+            )
+        )
+    }
+
+    @Test
     fun receiverAcceptsOnlyItsExplicitAction() {
         assertTrue(
             shouldHandleScriptGuardianPrewarm(ScriptGuardianPrewarmScheduler.ACTION_PREWARM)
