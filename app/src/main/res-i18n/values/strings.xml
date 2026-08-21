@@ -166,7 +166,7 @@
     <string name="text_script_guardian_path">守护脚本路径</string>
     <string name="summary_script_guardian_path">相对于 AutoX 脚本目录的路径，例如：receiver.js</string>
     <string name="text_script_guardian_keep_screen_on_while_charging">插电时保持屏幕常亮</string>
-    <string name="summary_script_guardian_keep_screen_on_while_charging">守护脚本有效且设备插电时保持屏幕常亮；意外熄屏后尝试重新点亮，不会解锁设备。自动点亮后 10 秒内再次熄屏会暂停本次 Guardian 运行期间的补救；重新插拔电源、关闭后再打开此设置或 Guardian 重启后可恢复</string>
+    <string name="summary_script_guardian_keep_screen_on_while_charging">守护脚本有效且设备插电时保持屏幕常亮；每次检测到熄屏都会进行最多两次重新点亮尝试，不会解锁设备。要停止补救，请拔掉电源或关闭此设置</string>
     <string name="text_script_guardian_prewarm_enable">定时预热脚本守护</string>
     <string name="summary_script_guardian_prewarm_disabled">关闭；只恢复 Guardian，不执行任何业务操作</string>
     <string name="summary_script_guardian_prewarm_scheduled">每天 %1$s；下次唤醒 %2$s</string>

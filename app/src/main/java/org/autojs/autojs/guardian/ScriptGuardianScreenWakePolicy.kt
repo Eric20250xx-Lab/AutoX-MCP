@@ -1,15 +1,13 @@
 package org.autojs.autojs.guardian
 
+@Suppress("UNUSED_PARAMETER")
 internal class ScriptGuardianScreenWakePolicy(
-    private val repeatOffWindowMillis: Long = REPEAT_OFF_WINDOW_MILLIS,
     private val maxRecoveryAttempts: Int = MAX_RECOVERY_ATTEMPTS
 ) {
     enum class State {
         INACTIVE,
         READY,
-        RECOVERING,
-        RECOVERED_GRACE,
-        USER_PAUSED
+        RECOVERING
     }
 
     enum class RecoveryAction {
@@ -21,7 +19,8 @@ internal class ScriptGuardianScreenWakePolicy(
 
     data class Decision(
         val shouldHoldLease: Boolean,
-        val recoveryAction: RecoveryAction
+        val recoveryAction: RecoveryAction,
+        val recoveryGeneration: Long? = null
     )
 
     @Volatile
@@ -33,7 +32,8 @@ internal class ScriptGuardianScreenWakePolicy(
         private set
 
     private var eligible = false
-    private var recoveredAtMillis: Long? = null
+    private var nextRecoveryGeneration = 0L
+    private var activeRecoveryGeneration: Long? = null
 
     @Synchronized
     fun updateEligibility(
@@ -57,17 +57,6 @@ internal class ScriptGuardianScreenWakePolicy(
             }
         }
 
-        val recoveredAt = recoveredAtMillis
-        if (
-            state == State.RECOVERED_GRACE &&
-            recoveredAt != null &&
-            nowMillis >= recoveredAt &&
-            nowMillis - recoveredAt > repeatOffWindowMillis
-        ) {
-            state = State.READY
-            recoveredAtMillis = null
-        }
-
         return currentDecision()
     }
 
@@ -76,22 +65,8 @@ internal class ScriptGuardianScreenWakePolicy(
         if (!eligible || state == State.INACTIVE) {
             return Decision(false, RecoveryAction.NONE)
         }
-        if (state == State.USER_PAUSED) {
-            return Decision(false, RecoveryAction.NONE)
-        }
         if (state == State.RECOVERING) {
             return Decision(true, RecoveryAction.NONE)
-        }
-
-        val recoveredAt = recoveredAtMillis
-        if (
-            state == State.RECOVERED_GRACE &&
-            recoveredAt != null &&
-            nowMillis >= recoveredAt &&
-            nowMillis - recoveredAt <= repeatOffWindowMillis
-        ) {
-            resetRecovery(State.USER_PAUSED)
-            return Decision(false, RecoveryAction.CANCEL)
         }
         return beginRecovery()
     }
@@ -102,23 +77,18 @@ internal class ScriptGuardianScreenWakePolicy(
             return Decision(false, RecoveryAction.NONE)
         }
         if (state == State.RECOVERING) {
-            if (recoveryAttempts == 0) {
-                resetRecovery(State.READY)
-                return Decision(true, RecoveryAction.CANCEL)
-            }
-            state = State.RECOVERED_GRACE
-            recoveredAtMillis = nowMillis
-            recoveryAttempts = 0
-            return Decision(true, RecoveryAction.NONE)
+            resetRecovery(State.READY)
+            return Decision(true, RecoveryAction.CANCEL)
         }
         return currentDecision()
     }
 
     @Synchronized
-    fun beginRecoveryAttempt(): Boolean {
+    fun beginRecoveryAttempt(recoveryGeneration: Long): Boolean {
         if (
             !eligible ||
             state != State.RECOVERING ||
+            activeRecoveryGeneration != recoveryGeneration ||
             recoveryAttempts >= maxRecoveryAttempts
         ) {
             return false
@@ -128,12 +98,20 @@ internal class ScriptGuardianScreenWakePolicy(
     }
 
     @Synchronized
-    fun onRecoveryChecked(interactive: Boolean, nowMillis: Long): Decision {
-        if (!eligible || state != State.RECOVERING) return currentDecision()
+    fun onRecoveryChecked(
+        recoveryGeneration: Long,
+        interactive: Boolean,
+        nowMillis: Long
+    ): Decision {
+        if (
+            !eligible ||
+            state != State.RECOVERING ||
+            activeRecoveryGeneration != recoveryGeneration
+        ) {
+            return currentDecision()
+        }
         if (interactive) {
-            state = State.RECOVERED_GRACE
-            recoveredAtMillis = nowMillis
-            recoveryAttempts = 0
+            resetRecovery(State.READY)
             return Decision(true, RecoveryAction.NONE)
         }
         if (recoveryAttempts < maxRecoveryAttempts) {
@@ -145,25 +123,29 @@ internal class ScriptGuardianScreenWakePolicy(
     }
 
     private fun beginRecovery(): Decision {
+        nextRecoveryGeneration += 1
+        activeRecoveryGeneration = nextRecoveryGeneration
         state = State.RECOVERING
-        recoveredAtMillis = null
         recoveryAttempts = 0
-        return Decision(true, RecoveryAction.START)
+        return Decision(
+            shouldHoldLease = true,
+            recoveryAction = RecoveryAction.START,
+            recoveryGeneration = activeRecoveryGeneration
+        )
     }
 
     private fun resetRecovery(nextState: State) {
         state = nextState
-        recoveredAtMillis = null
         recoveryAttempts = 0
+        activeRecoveryGeneration = null
     }
 
     private fun currentDecision(): Decision = Decision(
-        shouldHoldLease = eligible && state != State.USER_PAUSED,
+        shouldHoldLease = eligible,
         recoveryAction = RecoveryAction.NONE
     )
 
     companion object {
-        internal const val REPEAT_OFF_WINDOW_MILLIS = 10_000L
         internal const val MAX_RECOVERY_ATTEMPTS = 2
 
         fun shouldHold(

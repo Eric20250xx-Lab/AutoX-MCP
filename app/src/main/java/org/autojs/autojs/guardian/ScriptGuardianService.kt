@@ -304,7 +304,15 @@ class ScriptGuardianService : Service() {
         }
         when (decision.recoveryAction) {
             ScriptGuardianScreenWakePolicy.RecoveryAction.START -> {
-                scheduleScreenRecovery(reason)
+                val recoveryGeneration = decision.recoveryGeneration
+                if (recoveryGeneration == null) {
+                    Log.w(
+                        "ScriptGuardianService",
+                        "Screen wake $reason missing recovery generation"
+                    )
+                } else {
+                    scheduleScreenRecovery(reason, recoveryGeneration)
+                }
             }
 
             ScriptGuardianScreenWakePolicy.RecoveryAction.CANCEL -> {
@@ -323,26 +331,32 @@ class ScriptGuardianService : Service() {
         }
     }
 
-    private fun scheduleScreenRecovery(reason: String) {
+    private fun scheduleScreenRecovery(reason: String, recoveryGeneration: Long) {
         cancelScreenRecovery()
         screenRecoveryJob = serviceScope.launch {
             delay(SCREEN_RECOVERY_INITIAL_DELAY_MILLIS)
             while (serviceJob.isActive) {
                 if (powerManager.isInteractive) {
-                    screenWakePolicy.onScreenOn(SystemClock.elapsedRealtime())
+                    screenWakePolicy.onRecoveryChecked(
+                        recoveryGeneration = recoveryGeneration,
+                        interactive = true,
+                        nowMillis = SystemClock.elapsedRealtime()
+                    )
                     return@launch
                 }
-                if (!screenWakePolicy.beginRecoveryAttempt()) return@launch
+                if (!screenWakePolicy.beginRecoveryAttempt(recoveryGeneration)) return@launch
 
                 val attempt = screenWakePolicy.recoveryAttempts
                 val refreshed = screenWakeLockLease.refreshNow(screenWakeupFactory)
                 Log.i(
                     "ScriptGuardianService",
-                    "Screen wake $reason attempt=$attempt leaseRefreshed=$refreshed"
+                    "Screen wake $reason generation=$recoveryGeneration " +
+                        "attempt=$attempt leaseRefreshed=$refreshed"
                 )
                 delay(SCREEN_RECOVERY_CONFIRM_DELAY_MILLIS)
 
                 val decision = screenWakePolicy.onRecoveryChecked(
+                    recoveryGeneration = recoveryGeneration,
                     interactive = powerManager.isInteractive,
                     nowMillis = SystemClock.elapsedRealtime()
                 )
