@@ -127,12 +127,25 @@ internal class ScriptGuardianSupervisor(
     @Volatile
     private var currentExecution: ScriptGuardianExecution? = null
 
+    @Volatile
+    private var currentHeartbeatState: ScriptGuardianHeartbeatState? = null
+
+    @Volatile
+    private var busyHeartbeatPending = false
+
     fun reconcile(file: File?) {
         commands.trySend(Command.Apply(file?.canonicalFile))
     }
 
-    fun reportHeartbeat(report: ScriptGuardianHeartbeatReport): Boolean =
-        commands.trySend(Command.Heartbeat(report)).isSuccess
+    fun reportHeartbeat(report: ScriptGuardianHeartbeatReport): Boolean {
+        if (report.state == ScriptGuardianHeartbeatState.BUSY) {
+            busyHeartbeatPending = true
+        }
+        return commands.trySend(Command.Heartbeat(report)).isSuccess
+    }
+
+    fun allowsBackgroundKeyguardGesture(): Boolean =
+        currentHeartbeatState == ScriptGuardianHeartbeatState.IDLE && !busyHeartbeatPending
 
     suspend fun close() {
         val completed = CompletableDeferred<Unit>()
@@ -401,6 +414,8 @@ internal class ScriptGuardianSupervisor(
         if (previous != null && report.sequence <= previous.sequence) return
 
         heartbeatState = report
+        currentHeartbeatState = report.state
+        busyHeartbeatPending = report.state == ScriptGuardianHeartbeatState.BUSY
         heartbeatJob?.cancel()
         heartbeatJob = null
         busyWarningJob?.cancel()
@@ -455,6 +470,8 @@ internal class ScriptGuardianSupervisor(
         busyWarningJob?.cancel()
         busyWarningJob = null
         heartbeatState = null
+        currentHeartbeatState = null
+        busyHeartbeatPending = false
     }
 
     private fun describeError(error: Throwable): String =

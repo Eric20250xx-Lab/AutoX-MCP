@@ -289,6 +289,30 @@ class ScriptGuardianSupervisorTest {
     }
 
     @Test
+    fun backgroundKeyguardGestureIsAllowedOnlyWhileCurrentSessionIsIdle() = runBlocking {
+        supervisor.reconcile(A)
+        yield()
+        val sessionId = runner.starts.single().sessionId
+
+        assertFalse(supervisor.allowsBackgroundKeyguardGesture())
+
+        supervisor.reportHeartbeat(heartbeat(sessionId, 1L, ScriptGuardianHeartbeatState.IDLE))
+        yield()
+        assertTrue(supervisor.allowsBackgroundKeyguardGesture())
+
+        supervisor.reportHeartbeat(
+            heartbeat(sessionId, 2L, ScriptGuardianHeartbeatState.BUSY, "command-1")
+        )
+        assertFalse(supervisor.allowsBackgroundKeyguardGesture())
+        yield()
+        assertFalse(supervisor.allowsBackgroundKeyguardGesture())
+
+        supervisor.reconcile(B)
+        yield()
+        assertFalse(supervisor.allowsBackgroundKeyguardGesture())
+    }
+
+    @Test
     fun engineFailureReasonIsPreservedForRetry() = runBlocking {
         supervisor.reconcile(A)
         yield()

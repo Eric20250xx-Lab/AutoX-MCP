@@ -1,5 +1,7 @@
 package org.autojs.autojs.guardian
 
+import android.accessibilityservice.GestureDescription
+import android.app.KeyguardManager
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -9,6 +11,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.ServiceInfo
+import android.graphics.Path
 import android.os.BatteryManager
 import android.os.Build
 import android.os.Handler
@@ -21,6 +24,7 @@ import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -28,7 +32,10 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import org.autojs.autoxjs.R
+import com.stardust.automator.AccessibilityGestureCoordinator
+import com.stardust.view.accessibility.AccessibilityService as AutoXAccessibilityService
 
 class ScriptGuardianService : Service() {
     private val serviceJob = SupervisorJob()
@@ -41,6 +48,7 @@ class ScriptGuardianService : Service() {
     private lateinit var screenWakeLockLease: ScriptGuardianWakeLockLease
     private lateinit var screenWakeupFactory: ScriptGuardianWakeLockFactory
     private lateinit var powerManager: PowerManager
+    private lateinit var keyguardManager: KeyguardManager
     private val screenWakePolicy = ScriptGuardianScreenWakePolicy()
     private var screenRecoveryJob: Job? = null
     private var batteryReceiverRegistered = false
@@ -97,6 +105,7 @@ class ScriptGuardianService : Service() {
             }
         )
         powerManager = getSystemService(PowerManager::class.java)
+        keyguardManager = getSystemService(KeyguardManager::class.java)
         screenWakeLockLease = ScriptGuardianWakeLockLease(
             scope = serviceScope,
             factory = ScriptGuardianWakeLockLease.androidFactory(
@@ -286,7 +295,9 @@ class ScriptGuardianService : Service() {
         )
         val decision = screenWakePolicy.updateEligibility(
             eligible = eligible,
-            interactive = powerManager.isInteractive,
+            recovered = currentKeyguardAction().let(
+                ScriptGuardianKeyguardPolicy::isRecoveryComplete
+            ),
             nowMillis = SystemClock.elapsedRealtime()
         )
         applyScreenWakeDecision(decision, "eligibility")
@@ -336,10 +347,19 @@ class ScriptGuardianService : Service() {
         screenRecoveryJob = serviceScope.launch {
             delay(SCREEN_RECOVERY_INITIAL_DELAY_MILLIS)
             while (serviceJob.isActive) {
-                if (powerManager.isInteractive) {
+                val initialKeyguardAction = currentKeyguardActionOnMain()
+                val waitedForAccessibility =
+                    initialKeyguardAction ==
+                        ScriptGuardianKeyguardPolicy.Action.WAIT_FOR_ACCESSIBILITY
+                var keyguardAction = if (waitedForAccessibility) {
+                    awaitAccessibilityIfNeeded(recoveryGeneration, initialKeyguardAction)
+                } else {
+                    initialKeyguardAction
+                }
+                if (ScriptGuardianKeyguardPolicy.isRecoveryComplete(keyguardAction)) {
                     screenWakePolicy.onRecoveryChecked(
                         recoveryGeneration = recoveryGeneration,
-                        interactive = true,
+                        recovered = true,
                         nowMillis = SystemClock.elapsedRealtime()
                     )
                     return@launch
@@ -347,29 +367,182 @@ class ScriptGuardianService : Service() {
                 if (!screenWakePolicy.beginRecoveryAttempt(recoveryGeneration)) return@launch
 
                 val attempt = screenWakePolicy.recoveryAttempts
-                val refreshed = screenWakeLockLease.refreshNow(screenWakeupFactory)
+                val refreshed = if (
+                    keyguardAction == ScriptGuardianKeyguardPolicy.Action.WAIT_FOR_SCREEN
+                ) {
+                    screenWakeLockLease.refreshNow(screenWakeupFactory)
+                } else {
+                    false
+                }
                 Log.i(
                     "ScriptGuardianService",
                     "Screen wake $reason generation=$recoveryGeneration " +
                         "attempt=$attempt leaseRefreshed=$refreshed"
                 )
-                delay(SCREEN_RECOVERY_CONFIRM_DELAY_MILLIS)
+                if (keyguardAction == ScriptGuardianKeyguardPolicy.Action.WAIT_FOR_SCREEN) {
+                    delay(SCREEN_RECOVERY_CONFIRM_DELAY_MILLIS)
+                }
+
+                keyguardAction = currentKeyguardActionOnMain()
+                if (!waitedForAccessibility) {
+                    keyguardAction = awaitAccessibilityIfNeeded(
+                        recoveryGeneration,
+                        keyguardAction
+                    )
+                }
+                val gestureAccepted = if (
+                    keyguardAction == ScriptGuardianKeyguardPolicy.Action.DISMISS
+                ) {
+                    dispatchNonSecureKeyguardSwipe(recoveryGeneration)
+                } else {
+                    false
+                }
+                if (gestureAccepted) {
+                    delay(KEYGUARD_DISMISS_CONFIRM_DELAY_MILLIS)
+                }
+                val finalKeyguardAction = currentKeyguardActionOnMain()
+                val recovered = ScriptGuardianKeyguardPolicy.isRecoveryComplete(
+                    finalKeyguardAction
+                )
 
                 val decision = screenWakePolicy.onRecoveryChecked(
                     recoveryGeneration = recoveryGeneration,
-                    interactive = powerManager.isInteractive,
+                    recovered = recovered,
                     nowMillis = SystemClock.elapsedRealtime()
                 )
                 Log.i(
                     "ScriptGuardianService",
                     "Screen wake $reason checked: state=${screenWakePolicy.state}, " +
-                        "interactive=${powerManager.isInteractive}, " +
+                        "keyguardAction=$finalKeyguardAction, " +
+                        "gestureAccepted=$gestureAccepted, " +
                         "action=${decision.recoveryAction}"
                 )
                 if (decision.recoveryAction != ScriptGuardianScreenWakePolicy.RecoveryAction.RETRY) {
                     return@launch
                 }
+                delay(KEYGUARD_RETRY_DELAY_MILLIS)
             }
+        }
+    }
+
+    private fun currentKeyguardAction(): ScriptGuardianKeyguardPolicy.Action {
+        if (!::powerManager.isInitialized || !::keyguardManager.isInitialized) {
+            return ScriptGuardianKeyguardPolicy.Action.WAIT_FOR_SCREEN
+        }
+        return ScriptGuardianKeyguardPolicy.decide(
+            interactive = powerManager.isInteractive,
+            keyguardLocked = keyguardManager.isKeyguardLocked,
+            deviceSecure = keyguardManager.isDeviceSecure,
+            accessibilityAvailable = AutoXAccessibilityService.instance != null
+        )
+    }
+
+    private suspend fun currentKeyguardActionOnMain(): ScriptGuardianKeyguardPolicy.Action {
+        val result = CompletableDeferred<ScriptGuardianKeyguardPolicy.Action>()
+        val posted = mainHandler.post {
+            result.complete(currentKeyguardAction())
+        }
+        if (!posted) return ScriptGuardianKeyguardPolicy.Action.WAIT_FOR_SCREEN
+        return withTimeoutOrNull(KEYGUARD_STATE_TIMEOUT_MILLIS) {
+            result.await()
+        } ?: ScriptGuardianKeyguardPolicy.Action.WAIT_FOR_SCREEN
+    }
+
+    private suspend fun awaitAccessibilityIfNeeded(
+        recoveryGeneration: Long,
+        initialAction: ScriptGuardianKeyguardPolicy.Action
+    ): ScriptGuardianKeyguardPolicy.Action {
+        var action = initialAction
+        val deadline = SystemClock.elapsedRealtime() + KEYGUARD_ACCESSIBILITY_WAIT_MILLIS
+        while (
+            action == ScriptGuardianKeyguardPolicy.Action.WAIT_FOR_ACCESSIBILITY &&
+            screenWakePolicy.isRecoveryActive(recoveryGeneration)
+        ) {
+            val remaining = deadline - SystemClock.elapsedRealtime()
+            if (remaining <= 0L) break
+            delay(minOf(KEYGUARD_ACCESSIBILITY_POLL_MILLIS, remaining))
+            action = currentKeyguardActionOnMain()
+        }
+        return action
+    }
+
+    private suspend fun dispatchNonSecureKeyguardSwipe(recoveryGeneration: Long): Boolean {
+        val gestureLease = AccessibilityGestureCoordinator.acquire() ?: return false
+        val result = CompletableDeferred<Boolean>()
+        val posted = mainHandler.post {
+            if (!screenWakePolicy.isRecoveryActive(recoveryGeneration)) {
+                gestureLease.close()
+                result.complete(false)
+                return@post
+            }
+            if (!supervisor.allowsBackgroundKeyguardGesture()) {
+                gestureLease.close()
+                result.complete(false)
+                return@post
+            }
+            val action = currentKeyguardAction()
+            val accessibilityService = AutoXAccessibilityService.instance
+            if (
+                action != ScriptGuardianKeyguardPolicy.Action.DISMISS ||
+                accessibilityService == null
+            ) {
+                gestureLease.close()
+                result.complete(false)
+                return@post
+            }
+
+            val metrics = resources.displayMetrics
+            val centerX = metrics.widthPixels / 2f
+            val path = Path().apply {
+                moveTo(centerX, metrics.heightPixels * KEYGUARD_SWIPE_START_HEIGHT_RATIO)
+                lineTo(centerX, metrics.heightPixels * KEYGUARD_SWIPE_END_HEIGHT_RATIO)
+            }
+            val gesture = GestureDescription.Builder()
+                .addStroke(
+                    GestureDescription.StrokeDescription(
+                        path,
+                        0L,
+                        KEYGUARD_SWIPE_DURATION_MILLIS
+                    )
+                )
+                .build()
+            val callback = object : android.accessibilityservice.AccessibilityService
+                .GestureResultCallback() {
+                override fun onCompleted(gestureDescription: GestureDescription) {
+                    gestureLease.close()
+                    result.complete(true)
+                }
+
+                override fun onCancelled(gestureDescription: GestureDescription) {
+                    gestureLease.close()
+                    result.complete(false)
+                }
+            }
+            val accepted = runCatching {
+                accessibilityService.dispatchGesture(gesture, callback, mainHandler)
+            }.getOrElse { error ->
+                Log.w(
+                    "ScriptGuardianService",
+                    "Could not dispatch non-secure keyguard swipe",
+                    error
+                )
+                false
+            }
+            if (!accepted) {
+                gestureLease.close()
+                result.complete(false)
+            }
+        }
+        if (!posted) {
+            gestureLease.close()
+            return false
+        }
+        return try {
+            withTimeoutOrNull(KEYGUARD_GESTURE_TIMEOUT_MILLIS) {
+                result.await()
+            } ?: false
+        } finally {
+            gestureLease.close()
         }
     }
 
@@ -506,6 +679,15 @@ class ScriptGuardianService : Service() {
         private const val GUARD_RELEASE_RETRY_MILLIS = 5_000L
         private const val SCREEN_RECOVERY_INITIAL_DELAY_MILLIS = 1_000L
         private const val SCREEN_RECOVERY_CONFIRM_DELAY_MILLIS = 2_000L
+        private const val KEYGUARD_DISMISS_CONFIRM_DELAY_MILLIS = 750L
+        private const val KEYGUARD_ACCESSIBILITY_WAIT_MILLIS = 15_000L
+        private const val KEYGUARD_ACCESSIBILITY_POLL_MILLIS = 500L
+        private const val KEYGUARD_GESTURE_TIMEOUT_MILLIS = 1_500L
+        private const val KEYGUARD_RETRY_DELAY_MILLIS = 500L
+        private const val KEYGUARD_STATE_TIMEOUT_MILLIS = 1_000L
+        private const val KEYGUARD_SWIPE_DURATION_MILLIS = 350L
+        private const val KEYGUARD_SWIPE_START_HEIGHT_RATIO = 0.8f
+        private const val KEYGUARD_SWIPE_END_HEIGHT_RATIO = 0.2f
 
         @Volatile
         private var processConfig: ScriptGuardianConfig? = null

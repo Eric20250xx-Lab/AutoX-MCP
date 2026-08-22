@@ -38,7 +38,7 @@ internal class ScriptGuardianScreenWakePolicy(
     @Synchronized
     fun updateEligibility(
         eligible: Boolean,
-        interactive: Boolean,
+        recovered: Boolean,
         nowMillis: Long
     ): Decision {
         val eligibilityChanged = this.eligible != eligible
@@ -50,7 +50,7 @@ internal class ScriptGuardianScreenWakePolicy(
 
         if (eligibilityChanged) {
             resetRecovery(State.READY)
-            return if (interactive) {
+            return if (recovered) {
                 Decision(true, RecoveryAction.CANCEL)
             } else {
                 beginRecovery()
@@ -76,10 +76,6 @@ internal class ScriptGuardianScreenWakePolicy(
         if (!eligible || state == State.INACTIVE) {
             return Decision(false, RecoveryAction.NONE)
         }
-        if (state == State.RECOVERING) {
-            resetRecovery(State.READY)
-            return Decision(true, RecoveryAction.CANCEL)
-        }
         return currentDecision()
     }
 
@@ -98,9 +94,15 @@ internal class ScriptGuardianScreenWakePolicy(
     }
 
     @Synchronized
+    fun isRecoveryActive(recoveryGeneration: Long): Boolean =
+        eligible &&
+            state == State.RECOVERING &&
+            activeRecoveryGeneration == recoveryGeneration
+
+    @Synchronized
     fun onRecoveryChecked(
         recoveryGeneration: Long,
-        interactive: Boolean,
+        recovered: Boolean,
         nowMillis: Long
     ): Decision {
         if (
@@ -110,7 +112,7 @@ internal class ScriptGuardianScreenWakePolicy(
         ) {
             return currentDecision()
         }
-        if (interactive) {
+        if (recovered) {
             resetRecovery(State.READY)
             return Decision(true, RecoveryAction.NONE)
         }

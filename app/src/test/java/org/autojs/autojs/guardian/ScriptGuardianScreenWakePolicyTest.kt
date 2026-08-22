@@ -56,7 +56,7 @@ class ScriptGuardianScreenWakePolicyTest {
         assertDecision(
             policy.updateEligibility(
                 eligible = true,
-                interactive = true,
+                recovered = true,
                 nowMillis = 1_000L
             ),
             shouldHoldLease = true,
@@ -105,7 +105,7 @@ class ScriptGuardianScreenWakePolicyTest {
         assertDecision(
             policy.onRecoveryChecked(
                 recoveryGeneration = secondGeneration,
-                interactive = true,
+                recovered = true,
                 nowMillis = 5_002L
             ),
             shouldHoldLease = true,
@@ -124,7 +124,7 @@ class ScriptGuardianScreenWakePolicyTest {
         assertDecision(
             policy.onRecoveryChecked(
                 recoveryGeneration = thirdGeneration,
-                interactive = false,
+                recovered = false,
                 nowMillis = 5_004L
             ),
             shouldHoldLease = true,
@@ -135,7 +135,7 @@ class ScriptGuardianScreenWakePolicyTest {
         assertDecision(
             policy.onRecoveryChecked(
                 recoveryGeneration = thirdGeneration,
-                interactive = false,
+                recovered = false,
                 nowMillis = 5_005L
             ),
             shouldHoldLease = true,
@@ -149,7 +149,7 @@ class ScriptGuardianScreenWakePolicyTest {
         val policy = ScriptGuardianScreenWakePolicy()
         policy.updateEligibility(
             eligible = true,
-            interactive = true,
+            recovered = true,
             nowMillis = 1_000L
         )
 
@@ -169,35 +169,29 @@ class ScriptGuardianScreenWakePolicyTest {
     }
 
     @Test
-    fun screenOnBeforeAnAutomaticAttemptCancelsPendingRecovery() {
+    fun screenOnBeforeAnAutomaticAttemptKeepsPendingRecovery() {
         val policy = ScriptGuardianScreenWakePolicy()
-        policy.updateEligibility(
+        val recovery = policy.updateEligibility(
             eligible = true,
-            interactive = false,
+            recovered = false,
             nowMillis = 1_000L
         )
 
         assertDecision(
             policy.onScreenOn(nowMillis = 1_100L),
             shouldHoldLease = true,
-            recoveryAction = ScriptGuardianScreenWakePolicy.RecoveryAction.CANCEL
-        )
-        assertEquals(ScriptGuardianScreenWakePolicy.State.READY, policy.state)
-
-        assertDecision(
-            policy.onScreenOff(nowMillis = 1_500L),
-            shouldHoldLease = true,
-            recoveryAction = ScriptGuardianScreenWakePolicy.RecoveryAction.START
+            recoveryAction = ScriptGuardianScreenWakePolicy.RecoveryAction.NONE
         )
         assertEquals(ScriptGuardianScreenWakePolicy.State.RECOVERING, policy.state)
+        assertTrue(policy.beginRecoveryAttempt(recovery.requireRecoveryGeneration()))
     }
 
     @Test
-    fun screenOnDuringAnAttemptReturnsReadyAndImmediateOffRecoversAgain() {
+    fun screenOnDuringAnAttemptKeepsRecoveryUntilConfirmed() {
         val policy = ScriptGuardianScreenWakePolicy()
         val recovery = policy.updateEligibility(
             eligible = true,
-            interactive = false,
+            recovered = false,
             nowMillis = 1_000L
         )
         assertTrue(policy.beginRecoveryAttempt(recovery.requireRecoveryGeneration()))
@@ -205,46 +199,63 @@ class ScriptGuardianScreenWakePolicyTest {
         assertDecision(
             policy.onScreenOn(nowMillis = 2_000L),
             shouldHoldLease = true,
-            recoveryAction = ScriptGuardianScreenWakePolicy.RecoveryAction.CANCEL
-        )
-        assertEquals(ScriptGuardianScreenWakePolicy.State.READY, policy.state)
-        assertEquals(0, policy.recoveryAttempts)
-
-        assertDecision(
-            policy.onScreenOff(nowMillis = 4_000L),
-            shouldHoldLease = true,
-            recoveryAction = ScriptGuardianScreenWakePolicy.RecoveryAction.START
+            recoveryAction = ScriptGuardianScreenWakePolicy.RecoveryAction.NONE
         )
         assertEquals(ScriptGuardianScreenWakePolicy.State.RECOVERING, policy.state)
+        assertEquals(1, policy.recoveryAttempts)
+
+        assertDecision(
+            policy.onRecoveryChecked(
+                recoveryGeneration = recovery.requireRecoveryGeneration(),
+                recovered = true,
+                nowMillis = 4_000L
+            ),
+            shouldHoldLease = true,
+            recoveryAction = ScriptGuardianScreenWakePolicy.RecoveryAction.NONE
+        )
+        assertEquals(ScriptGuardianScreenWakePolicy.State.READY, policy.state)
     }
 
     @Test
-    fun lateCheckFromCanceledRecoveryCannotAffectNextScreenOffCycle() {
+    fun lateCheckFromResetRecoveryCannotAffectNextScreenOffCycle() {
         val policy = ScriptGuardianScreenWakePolicy()
         policy.updateEligibility(
             eligible = true,
-            interactive = true,
+            recovered = true,
             nowMillis = 1_000L
         )
 
         val firstRecovery = policy.onScreenOff(nowMillis = 1_100L)
         val firstGeneration = firstRecovery.requireRecoveryGeneration()
+        assertTrue(policy.isRecoveryActive(firstGeneration))
         assertTrue(policy.beginRecoveryAttempt(firstGeneration))
         assertDecision(
-            policy.onScreenOn(nowMillis = 1_200L),
-            shouldHoldLease = true,
+            policy.updateEligibility(
+                eligible = false,
+                recovered = false,
+                nowMillis = 1_200L
+            ),
+            shouldHoldLease = false,
             recoveryAction = ScriptGuardianScreenWakePolicy.RecoveryAction.CANCEL
+        )
+        assertFalse(policy.isRecoveryActive(firstGeneration))
+        policy.updateEligibility(
+            eligible = true,
+            recovered = true,
+            nowMillis = 1_250L
         )
 
         val secondRecovery = policy.onScreenOff(nowMillis = 1_300L)
         val secondGeneration = secondRecovery.requireRecoveryGeneration()
         assertTrue(firstGeneration != secondGeneration)
+        assertFalse(policy.isRecoveryActive(firstGeneration))
+        assertTrue(policy.isRecoveryActive(secondGeneration))
         assertTrue(policy.beginRecoveryAttempt(secondGeneration))
 
         assertDecision(
             policy.onRecoveryChecked(
                 recoveryGeneration = firstGeneration,
-                interactive = true,
+                recovered = true,
                 nowMillis = 1_400L
             ),
             shouldHoldLease = true,
@@ -256,7 +267,7 @@ class ScriptGuardianScreenWakePolicyTest {
         assertDecision(
             policy.onRecoveryChecked(
                 recoveryGeneration = secondGeneration,
-                interactive = false,
+                recovered = false,
                 nowMillis = 1_500L
             ),
             shouldHoldLease = true,
@@ -265,20 +276,29 @@ class ScriptGuardianScreenWakePolicyTest {
     }
 
     @Test
-    fun latePreAttemptInteractiveCheckCannotAffectNextScreenOffCycle() {
+    fun latePreAttemptRecoveredCheckCannotAffectNextScreenOffCycle() {
         val policy = ScriptGuardianScreenWakePolicy()
         policy.updateEligibility(
             eligible = true,
-            interactive = true,
+            recovered = true,
             nowMillis = 1_000L
         )
 
         val firstRecovery = policy.onScreenOff(nowMillis = 1_100L)
         val firstGeneration = firstRecovery.requireRecoveryGeneration()
         assertDecision(
-            policy.onScreenOn(nowMillis = 1_200L),
-            shouldHoldLease = true,
+            policy.updateEligibility(
+                eligible = false,
+                recovered = false,
+                nowMillis = 1_200L
+            ),
+            shouldHoldLease = false,
             recoveryAction = ScriptGuardianScreenWakePolicy.RecoveryAction.CANCEL
+        )
+        policy.updateEligibility(
+            eligible = true,
+            recovered = true,
+            nowMillis = 1_250L
         )
 
         val secondRecovery = policy.onScreenOff(nowMillis = 1_300L)
@@ -288,7 +308,7 @@ class ScriptGuardianScreenWakePolicyTest {
         assertDecision(
             policy.onRecoveryChecked(
                 recoveryGeneration = firstGeneration,
-                interactive = true,
+                recovered = true,
                 nowMillis = 1_400L
             ),
             shouldHoldLease = true,
@@ -300,13 +320,13 @@ class ScriptGuardianScreenWakePolicyTest {
     }
 
     @Test
-    fun coldStartWhileEligibleAndNonInteractiveStartsRecovery() {
+    fun coldStartWhileEligibleAndUnrecoveredStartsRecovery() {
         val policy = ScriptGuardianScreenWakePolicy()
 
         assertDecision(
             policy.updateEligibility(
                 eligible = true,
-                interactive = false,
+                recovered = false,
                 nowMillis = 1_000L
             ),
             shouldHoldLease = true,
@@ -320,7 +340,7 @@ class ScriptGuardianScreenWakePolicyTest {
         val policy = ScriptGuardianScreenWakePolicy(maxRecoveryAttempts = 2)
         val recovery = policy.updateEligibility(
             eligible = true,
-            interactive = false,
+            recovered = false,
             nowMillis = 1_000L
         )
         val recoveryGeneration = recovery.requireRecoveryGeneration()
@@ -329,7 +349,7 @@ class ScriptGuardianScreenWakePolicyTest {
         assertDecision(
             policy.onRecoveryChecked(
                 recoveryGeneration = recoveryGeneration,
-                interactive = false,
+                recovered = false,
                 nowMillis = 2_000L
             ),
             shouldHoldLease = true,
@@ -342,7 +362,7 @@ class ScriptGuardianScreenWakePolicyTest {
         assertDecision(
             policy.onRecoveryChecked(
                 recoveryGeneration = recoveryGeneration,
-                interactive = false,
+                recovered = false,
                 nowMillis = 3_000L
             ),
             shouldHoldLease = true,
@@ -357,7 +377,7 @@ class ScriptGuardianScreenWakePolicyTest {
         val policy = ScriptGuardianScreenWakePolicy()
         val recovery = policy.updateEligibility(
             eligible = true,
-            interactive = false,
+            recovered = false,
             nowMillis = 1_000L
         )
         assertTrue(policy.beginRecoveryAttempt(recovery.requireRecoveryGeneration()))
@@ -365,7 +385,7 @@ class ScriptGuardianScreenWakePolicyTest {
         assertDecision(
             policy.updateEligibility(
                 eligible = false,
-                interactive = false,
+                recovered = false,
                 nowMillis = 1_500L
             ),
             shouldHoldLease = false,
@@ -377,7 +397,7 @@ class ScriptGuardianScreenWakePolicyTest {
         assertDecision(
             policy.updateEligibility(
                 eligible = true,
-                interactive = true,
+                recovered = true,
                 nowMillis = 2_000L
             ),
             shouldHoldLease = true,
@@ -391,13 +411,13 @@ class ScriptGuardianScreenWakePolicyTest {
         val policy = ScriptGuardianScreenWakePolicy()
         policy.updateEligibility(
             eligible = true,
-            interactive = true,
+            recovered = true,
             nowMillis = 5_000L
         )
         assertDecision(
             policy.updateEligibility(
                 eligible = false,
-                interactive = false,
+                recovered = false,
                 nowMillis = 7_000L
             ),
             shouldHoldLease = false,
@@ -413,7 +433,7 @@ class ScriptGuardianScreenWakePolicyTest {
         assertDecision(
             policy.updateEligibility(
                 eligible = true,
-                interactive = false,
+                recovered = false,
                 nowMillis = 8_000L
             ),
             shouldHoldLease = true,
@@ -430,7 +450,7 @@ class ScriptGuardianScreenWakePolicyTest {
         assertDecision(
             policy.updateEligibility(
                 eligible = true,
-                interactive = false,
+                recovered = false,
                 nowMillis = 7_000L
             ),
             shouldHoldLease = true,
@@ -439,7 +459,7 @@ class ScriptGuardianScreenWakePolicyTest {
         assertDecision(
             policy.updateEligibility(
                 eligible = true,
-                interactive = true,
+                recovered = true,
                 nowMillis = 8_000L
             ),
             shouldHoldLease = true,
@@ -457,7 +477,7 @@ class ScriptGuardianScreenWakePolicyTest {
         return ScriptGuardianScreenWakePolicy().also { policy ->
             val recovery = policy.updateEligibility(
                 eligible = true,
-                interactive = false,
+                recovered = false,
                 nowMillis = nowMillis - 2_000L
             )
             val recoveryGeneration = recovery.requireRecoveryGeneration()
@@ -465,7 +485,7 @@ class ScriptGuardianScreenWakePolicyTest {
             assertDecision(
                 policy.onRecoveryChecked(
                     recoveryGeneration = recoveryGeneration,
-                    interactive = true,
+                    recovered = true,
                     nowMillis = nowMillis
                 ),
                 shouldHoldLease = true,
