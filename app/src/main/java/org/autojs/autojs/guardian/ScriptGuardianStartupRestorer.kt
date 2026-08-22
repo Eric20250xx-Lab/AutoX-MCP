@@ -16,6 +16,9 @@ internal class ScriptGuardianStartupRestorer(
                 context.applicationContext,
                 SCRIPT_GUARDIAN_MAIN_PROCESS_START
             )
+            ScriptGuardianRuntimeDiagnostics.recordRestore(
+                SCRIPT_GUARDIAN_MAIN_PROCESS_START
+            )
         },
         applyConfig = { config ->
             ScriptGuardianService.applyConfig(context.applicationContext, config)

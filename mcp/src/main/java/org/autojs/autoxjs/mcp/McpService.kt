@@ -2,6 +2,13 @@ package org.autojs.autoxjs.mcp
 
 import android.content.Context
 import android.util.Log
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import org.autojs.autoxjs.mcp.tool.ToolDefinition
 import org.autojs.autoxjs.mcp.tool.ToolRegistry
 import org.autojs.autoxjs.mcp.tool.ToolSchemas
@@ -38,7 +45,19 @@ import org.autojs.autoxjs.mcp.tools.UpdateScriptTool
 /**
  * Facade to start/stop MCP server with default tools registered.
  */
-class McpService(private val context: Context) {
+class McpService internal constructor(
+    private val context: Context,
+    private val healthSupervisor: McpSelfHealthSupervisor,
+    private val healthProbe: McpHealthProbe,
+    private val probeIntervalMillis: Long
+) {
+    constructor(context: Context) : this(
+        context = context,
+        healthSupervisor = McpHealthStatus.runtime(),
+        healthProbe = McpLocalHealthProbe(),
+        probeIntervalMillis = SELF_PROBE_INTERVAL_MILLIS
+    )
+
     private val tracker = JobTracker()
     private val registry = ToolRegistry()
     private val runtimeProvider = McpRuntimeProvider()
@@ -52,6 +71,9 @@ class McpService(private val context: Context) {
     ) { currentConfig }
     private var server: McpServer? = null
     private var activeConfig: McpConfig? = null
+    private val healthScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private var healthProbeJob: Job? = null
+    private var healthSessionStarted = false
 
     init {
         registerDefaultTools()
@@ -64,30 +86,93 @@ class McpService(private val context: Context) {
             stop()
             return false
         }
+        if (!healthSessionStarted) {
+            healthSupervisor.startSession()
+            healthSessionStarted = true
+        }
         if (server == null) {
-            server = McpServer(context.applicationContext, registry)
+            server = McpServer(context.applicationContext, registry, healthSupervisor)
         }
         if (activeConfig == config && server?.isRunning == true) {
+            ensureHealthProbeLoop()
             return true
         }
+        // Keep the desired config after a bind failure so the probe loop can retry only Ktor.
+        activeConfig = config
         val started = server?.start(config) == true
         if (started) {
-            activeConfig = config
             Log.i(TAG, "MCP service started")
         } else {
-            activeConfig = null
             Log.e(TAG, "MCP service failed to start")
         }
+        ensureHealthProbeLoop()
         return started
     }
 
     @Synchronized
     fun stop() {
+        healthProbeJob?.cancel()
+        healthProbeJob = null
         server?.stop()
         server = null
         activeConfig = null
+        healthSupervisor.stopSession()
+        healthSessionStarted = false
         runtimeProvider.close()
         Log.i(TAG, "MCP service stopped")
+    }
+
+    private fun ensureHealthProbeLoop() {
+        if (healthProbeJob?.isActive == true) {
+            return
+        }
+        healthProbeJob = healthScope.launch {
+            while (isActive) {
+                delay(probeIntervalMillis)
+                probeAndRecoverIfNeeded()
+            }
+        }
+    }
+
+    private suspend fun probeAndRecoverIfNeeded() {
+        val probeTarget = synchronized(this) {
+            val config = activeConfig ?: return
+            val identity = healthSupervisor.expectedIdentity() ?: return
+            McpSelfProbeTarget(config, identity)
+        }
+        when (val result = healthProbe.probe(probeTarget.config, probeTarget.identity)) {
+            McpProbeResult.Success -> healthSupervisor.recordProbeSuccess(probeTarget.identity)
+            is McpProbeResult.Failure -> {
+                when (healthSupervisor.recordProbeFailure(probeTarget.identity, result.errorCode)) {
+                    McpRecoveryAction.RESTART_ENGINE -> restartEngineOnly(
+                        expectedIdentity = probeTarget.identity,
+                        expectedConfig = probeTarget.config
+                    )
+                    McpRecoveryAction.NONE,
+                    McpRecoveryAction.RATE_LIMITED -> Unit
+                }
+            }
+        }
+    }
+
+    @Synchronized
+    private fun restartEngineOnly(
+        expectedIdentity: McpEngineIdentity,
+        expectedConfig: McpConfig
+    ) {
+        val currentIdentity = healthSupervisor.expectedIdentity()
+        if (!runMcpEngineRestartIfCurrent(
+                activeConfig = activeConfig,
+                currentIdentity = currentIdentity,
+                expectedConfig = expectedConfig,
+                expectedIdentity = expectedIdentity
+            ) { config ->
+                Log.w(TAG, "Restarting embedded MCP HTTP engine after failed self-probes")
+                server?.start(config)
+            }
+        ) {
+            return
+        }
     }
 
     private fun registerDefaultTools() {
@@ -468,5 +553,25 @@ class McpService(private val context: Context) {
 
     companion object {
         private const val TAG = "McpService"
+        internal const val SELF_PROBE_INTERVAL_MILLIS = 20_000L
     }
+}
+
+internal data class McpSelfProbeTarget(
+    val config: McpConfig,
+    val identity: McpEngineIdentity
+)
+
+internal fun runMcpEngineRestartIfCurrent(
+    activeConfig: McpConfig?,
+    currentIdentity: McpEngineIdentity?,
+    expectedConfig: McpConfig,
+    expectedIdentity: McpEngineIdentity,
+    restart: (McpConfig) -> Unit
+): Boolean {
+    if (activeConfig != expectedConfig || currentIdentity != expectedIdentity) {
+        return false
+    }
+    restart(expectedConfig)
+    return true
 }

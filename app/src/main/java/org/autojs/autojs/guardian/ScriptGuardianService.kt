@@ -57,7 +57,18 @@ class ScriptGuardianService : Service() {
     private var screenWakeConfigValid = false
     private var keepScreenOnWhileCharging = false
     private val heartbeatSink: (ScriptGuardianHeartbeatReport) -> Boolean = { report ->
-        if (::supervisor.isInitialized) supervisor.reportHeartbeat(report) else false
+        if (canAwaitScriptGuardianBridgeAck() && ::supervisor.isInitialized) {
+            supervisor.reportHeartbeat(report)
+        } else {
+            false
+        }
+    }
+    private val heartbeatExpectationSink: (String) -> Boolean = { sessionId ->
+        if (canAwaitScriptGuardianBridgeAck() && ::supervisor.isInitialized) {
+            supervisor.expectHeartbeat(sessionId)
+        } else {
+            false
+        }
     }
     private val batteryReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
@@ -145,6 +156,7 @@ class ScriptGuardianService : Service() {
             Log.w("ScriptGuardianService", "Could not observe charging state", error)
         }
         ScriptGuardianHeartbeat.bind(heartbeatSink)
+        ScriptGuardianHeartbeat.bindExpectation(heartbeatExpectationSink)
     }
 
     private fun createSupervisor() = ScriptGuardianSupervisor(
@@ -152,6 +164,11 @@ class ScriptGuardianService : Service() {
         runner = runner,
         onStatus = ::renderStatus
     )
+
+    private fun canAwaitScriptGuardianBridgeAck(): Boolean =
+        shouldAwaitScriptGuardianBridgeAck(
+            isMainThread = Looper.myLooper() == Looper.getMainLooper()
+        )
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         startForegroundIfNeeded(getString(R.string.script_guardian_status_waiting))
@@ -162,10 +179,26 @@ class ScriptGuardianService : Service() {
             return START_NOT_STICKY
         }
 
-        val config = if (intent?.action == ACTION_APPLY_CONFIG) {
-            intent.readConfig() ?: ScriptGuardianPrefs.load(this)
-        } else {
-            processConfig ?: ScriptGuardianPrefs.load(this)
+        val watchdogRecoveryRequest = intent?.action == ACTION_VERIFY_AND_RECOVER
+        val config = when {
+            watchdogRecoveryRequest -> {
+                val current = ScriptGuardianPrefs.load(this)
+                if (!current.enabled) {
+                    pendingConfig = null
+                    processConfig = null
+                    stopGuardian()
+                    return START_NOT_STICKY
+                }
+                current
+            }
+
+            intent?.action == ACTION_APPLY_CONFIG ->
+                intent.readConfig() ?: ScriptGuardianPrefs.load(this)
+
+            else -> processConfig ?: ScriptGuardianPrefs.load(this)
+        }
+        if (intent?.action == ACTION_VERIFY_AND_RECOVER) {
+            ScriptGuardianRuntimeDiagnostics.recordRestore(intent.action)
         }
         processConfig = config
         if (stopping) {
@@ -184,6 +217,7 @@ class ScriptGuardianService : Service() {
         mainHandler.removeCallbacksAndMessages(null)
         cancelScreenRecovery()
         ScriptGuardianHeartbeat.unbind(heartbeatSink)
+        ScriptGuardianHeartbeat.unbindExpectation(heartbeatExpectationSink)
         if (::wakeLockLease.isInitialized) {
             wakeLockLease.stop()
         }
@@ -553,6 +587,7 @@ class ScriptGuardianService : Service() {
 
     private fun renderStatus(status: ScriptGuardianStatus) {
         diagnostics.recordStatus(status)
+        ScriptGuardianRuntimeDiagnostics.updateGuardian(status)
         val text = when (status) {
             ScriptGuardianStatus.Disabled -> {
                 if (configEnabled && invalidConfigReason != null) {
@@ -670,6 +705,8 @@ class ScriptGuardianService : Service() {
         private const val NOTIFICATION_ID = 27191
         private const val ACTION_APPLY_CONFIG =
             "org.autojs.autojs.guardian.action.APPLY_CONFIG"
+        internal const val ACTION_VERIFY_AND_RECOVER =
+            "org.autojs.autojs.guardian.action.VERIFY_AND_RECOVER"
         private const val ACTION_STOP = "org.autojs.autojs.guardian.action.STOP"
         private const val EXTRA_ENABLED = "enabled"
         private const val EXTRA_PATH = "path"
@@ -693,17 +730,8 @@ class ScriptGuardianService : Service() {
         private var processConfig: ScriptGuardianConfig? = null
 
         internal fun applyConfig(context: Context, config: ScriptGuardianConfig) {
-            val intent = Intent(context, ScriptGuardianService::class.java).apply {
-                action = ACTION_APPLY_CONFIG
-                putExtra(EXTRA_ENABLED, config.enabled)
-                putExtra(EXTRA_PATH, config.relativePath)
-                putExtra(EXTRA_SCRIPT_ROOT, config.scriptRoot)
-                putExtra(
-                    EXTRA_KEEP_SCREEN_ON_WHILE_CHARGING,
-                    config.keepScreenOnWhileCharging
-                )
-            }
-            startServiceSafely(context, intent)
+            ScriptGuardianWatchdogService.applyConfig(context, config)
+            startWithConfig(context, config, ACTION_APPLY_CONFIG)
         }
 
         internal fun restore(context: Context) {
@@ -713,9 +741,36 @@ class ScriptGuardianService : Service() {
             }
         }
 
+        internal fun verifyAndRecover(context: Context) {
+            val config = ScriptGuardianPrefs.load(context)
+            if (!config.enabled) return
+            ScriptGuardianWatchdogService.applyConfig(context, config)
+            ScriptGuardianRuntimeDiagnostics.recordRestore(ACTION_VERIFY_AND_RECOVER)
+            startWithConfig(context, config, ACTION_VERIFY_AND_RECOVER)
+        }
+
         internal fun stop(context: Context) {
+            ScriptGuardianWatchdogService.stop(context)
             val intent = Intent(context, ScriptGuardianService::class.java).apply {
                 action = ACTION_STOP
+            }
+            startServiceSafely(context, intent)
+        }
+
+        private fun startWithConfig(
+            context: Context,
+            config: ScriptGuardianConfig,
+            requestAction: String
+        ) {
+            val intent = Intent(context, ScriptGuardianService::class.java).apply {
+                action = requestAction
+                putExtra(EXTRA_ENABLED, config.enabled)
+                putExtra(EXTRA_PATH, config.relativePath)
+                putExtra(EXTRA_SCRIPT_ROOT, config.scriptRoot)
+                putExtra(
+                    EXTRA_KEEP_SCREEN_ON_WHILE_CHARGING,
+                    config.keepScreenOnWhileCharging
+                )
             }
             startServiceSafely(context, intent)
         }
@@ -729,3 +784,5 @@ class ScriptGuardianService : Service() {
         }
     }
 }
+
+internal fun shouldAwaitScriptGuardianBridgeAck(isMainThread: Boolean): Boolean = !isMainThread

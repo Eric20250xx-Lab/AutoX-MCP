@@ -5,6 +5,7 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.os.Build
+import android.os.SystemClock
 import androidx.preference.PreferenceManager
 import java.time.Instant
 import java.time.LocalTime
@@ -47,6 +48,11 @@ internal data class ScriptGuardianPrewarmReceiverFlow(
     val shouldRestore: Boolean,
     val shouldReconcile: Boolean
 )
+
+internal enum class ScriptGuardianImmediateRecoveryAction {
+    REQUEST_RESTORE,
+    VERIFY_AND_RECOVER
+}
 
 internal val SCRIPT_GUARDIAN_PREWARM_ZONE_ID: ZoneId = ZoneId.of("Asia/Shanghai")
 
@@ -173,6 +179,10 @@ internal fun scriptGuardianPrewarmCatchUpScheduledAt(
 
 internal object ScriptGuardianPrewarmScheduler {
     const val ACTION_PREWARM = "org.autojs.autojs.guardian.action.PREWARM"
+    internal const val ACTION_WATCHDOG_REQUEST_RESTORE =
+        "org.autojs.autojs.guardian.action.WATCHDOG_REQUEST_RESTORE"
+    internal const val ACTION_WATCHDOG_VERIFY_AND_RECOVER =
+        "org.autojs.autojs.guardian.action.WATCHDOG_VERIFY_AND_RECOVER"
     internal const val EXTRA_SCHEDULED_AT = "scheduled_at"
     internal const val RECEIPT_KIND_ALARM = "ALARM"
     internal const val RECEIPT_KIND_CATCH_UP = "CATCH_UP"
@@ -232,7 +242,7 @@ internal object ScriptGuardianPrewarmScheduler {
                 kind = RECEIPT_KIND_CATCH_UP
             )
             writeSnapshot(appContext, previous)
-            ScriptGuardianService.restore(appContext)
+            ScriptGuardianService.verifyAndRecover(appContext)
         }
 
         val plan = if (alarmManager == null && prewarmEnabled && guardianEnabled) {
@@ -295,6 +305,32 @@ internal object ScriptGuardianPrewarmScheduler {
         return canScheduleExactAlarms(alarmManager)
     }
 
+    /**
+     * Schedules a distinct package-private alarm so the main-process receiver gets the system's
+     * exact-alarm foreground-service start exemption. This process never reads main-process prefs.
+     */
+    fun requestImmediateRecovery(
+        context: Context,
+        recoveryAction: ScriptGuardianImmediateRecoveryAction
+    ): Boolean {
+        val appContext = context.applicationContext
+        val alarmManager = appContext.getSystemService(Context.ALARM_SERVICE) as? AlarmManager
+            ?: return false
+        if (!canScheduleExactAlarms(alarmManager)) return false
+        return try {
+            alarmManager.setExactAndAllowWhileIdle(
+                AlarmManager.ELAPSED_REALTIME_WAKEUP,
+                SystemClock.elapsedRealtime() + IMMEDIATE_RECOVERY_DELAY_MILLIS,
+                immediateRecoveryPendingIntent(appContext, recoveryAction)
+            )
+            true
+        } catch (_: SecurityException) {
+            false
+        } catch (_: RuntimeException) {
+            false
+        }
+    }
+
     fun snapshot(context: Context): ScriptGuardianPrewarmSnapshot {
         val prefs = diagnosticPreferences(context.applicationContext)
         return ScriptGuardianPrewarmSnapshot(
@@ -349,6 +385,29 @@ internal object ScriptGuardianPrewarmScheduler {
         )
     }
 
+    private fun immediateRecoveryPendingIntent(
+        context: Context,
+        recoveryAction: ScriptGuardianImmediateRecoveryAction
+    ): PendingIntent {
+        val (action, requestCode) = when (recoveryAction) {
+            ScriptGuardianImmediateRecoveryAction.REQUEST_RESTORE ->
+                ACTION_WATCHDOG_REQUEST_RESTORE to REQUEST_CODE_WATCHDOG_RESTORE
+
+            ScriptGuardianImmediateRecoveryAction.VERIFY_AND_RECOVER ->
+                ACTION_WATCHDOG_VERIFY_AND_RECOVER to REQUEST_CODE_WATCHDOG_VERIFY
+        }
+        val intent = Intent(context, ScriptGuardianPrewarmReceiver::class.java).apply {
+            this.action = action
+            `package` = context.packageName
+        }
+        return PendingIntent.getBroadcast(
+            context,
+            requestCode,
+            intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+    }
+
     private fun diagnosticPreferences(context: Context) =
         context.getSharedPreferences(DIAGNOSTIC_PREFS_NAME, Context.MODE_PRIVATE)
 
@@ -370,6 +429,9 @@ internal object ScriptGuardianPrewarmScheduler {
 
     private const val DIAGNOSTIC_PREFS_NAME = "script_guardian_prewarm_diagnostics"
     private const val REQUEST_CODE = 27192
+    private const val REQUEST_CODE_WATCHDOG_RESTORE = 27194
+    private const val REQUEST_CODE_WATCHDOG_VERIFY = 27195
+    private const val IMMEDIATE_RECOVERY_DELAY_MILLIS = 1_000L
     private const val KEY_STATE = "state"
     private const val KEY_NEXT_TRIGGER_AT = "next_trigger_at"
     private const val KEY_LAST_SCHEDULED_AT = "last_scheduled_at"

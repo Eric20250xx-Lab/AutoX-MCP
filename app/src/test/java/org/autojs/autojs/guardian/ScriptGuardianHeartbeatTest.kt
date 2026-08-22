@@ -7,6 +7,41 @@ import org.junit.Test
 
 class ScriptGuardianHeartbeatTest {
     @Test
+    fun bridgeReturnsTheSynchronousSinkDecision() {
+        val expectationListener: (String) -> Boolean = { false }
+        val heartbeatListener: (ScriptGuardianHeartbeatReport) -> Boolean = { false }
+        ScriptGuardianHeartbeat.bindExpectation(expectationListener)
+        ScriptGuardianHeartbeat.bind(heartbeatListener)
+        try {
+            assertFalse(ScriptGuardianHeartbeat.expect("session"))
+            assertFalse(ScriptGuardianHeartbeat.reportIdle("session", 1L))
+            assertFalse(ScriptGuardianHeartbeat.reportBusy("session", 2L, "command"))
+        } finally {
+            ScriptGuardianHeartbeat.unbindExpectation(expectationListener)
+            ScriptGuardianHeartbeat.unbind(heartbeatListener)
+        }
+    }
+
+    @Test
+    fun heartbeatExpectationRequiresSessionAndUsesDedicatedSink() {
+        val sessions = mutableListOf<String>()
+        val listener: (String) -> Boolean = {
+            sessions += it
+            true
+        }
+        ScriptGuardianHeartbeat.bindExpectation(listener)
+        try {
+            assertFalse(ScriptGuardianHeartbeat.expect(""))
+            assertTrue(ScriptGuardianHeartbeat.expect(" session "))
+        } finally {
+            ScriptGuardianHeartbeat.unbindExpectation(listener)
+        }
+
+        assertEquals(listOf("session"), sessions)
+        assertFalse(ScriptGuardianHeartbeat.expect("session"))
+    }
+
+    @Test
     fun invalidReportsReturnFalseWithoutCallingSink() {
         var calls = 0
         val listener: (ScriptGuardianHeartbeatReport) -> Boolean = {

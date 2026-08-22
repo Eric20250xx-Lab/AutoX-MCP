@@ -6,8 +6,11 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeoutOrNull
 import java.io.File
 import java.util.UUID
+import java.util.concurrent.atomic.AtomicReference
 import kotlin.math.min
 
 internal interface ScriptGuardianExecution
@@ -64,7 +67,9 @@ internal class ScriptGuardianSupervisor(
     private val scope: CoroutineScope,
     private val runner: ScriptGuardianRunner,
     private val wait: suspend (Long) -> Unit = { delay(it) },
-    private val onStatus: (ScriptGuardianStatus) -> Unit = {}
+    private val onStatus: (ScriptGuardianStatus) -> Unit = {},
+    private val bridgeAckTimeoutMillis: Long = BRIDGE_ACK_TIMEOUT_MILLIS,
+    private val onBridgeRequestClaimed: () -> Unit = {}
 ) {
     private data class Desired(val generation: Long, val file: File)
 
@@ -82,11 +87,38 @@ internal class ScriptGuardianSupervisor(
         val retryReason: String? = null
     )
 
+    private enum class BridgeRequestState {
+        PENDING,
+        CLAIMED,
+        CANCELLED
+    }
+
+    private class BridgeRequest {
+        private val state = AtomicReference(BridgeRequestState.PENDING)
+        val result = CompletableDeferred<Boolean>()
+
+        fun claim(): Boolean =
+            state.compareAndSet(BridgeRequestState.PENDING, BridgeRequestState.CLAIMED)
+
+        fun cancelPending(): Boolean =
+            state.compareAndSet(BridgeRequestState.PENDING, BridgeRequestState.CANCELLED)
+
+        fun isClaimed(): Boolean = state.get() == BridgeRequestState.CLAIMED
+    }
+
     private sealed interface Command {
         data class Apply(val file: File?) : Command
         data class Started(val slotId: Long) : Command
         data class Finished(val slotId: Long, val error: Throwable?) : Command
-        data class Heartbeat(val report: ScriptGuardianHeartbeatReport) : Command
+        data class ExpectHeartbeat(
+            val sessionId: String,
+            val request: BridgeRequest
+        ) : Command
+        data class Heartbeat(
+            val report: ScriptGuardianHeartbeatReport,
+            val request: BridgeRequest
+        ) : Command
+        data class FirstHeartbeatExpired(val slotId: Long) : Command
         data class HeartbeatExpired(val slotId: Long, val sequence: Long) : Command
         data class BusyWarning(val slotId: Long, val sequence: Long) : Command
         data class TakeoverCompleted(
@@ -104,7 +136,12 @@ internal class ScriptGuardianSupervisor(
     private val commands = Channel<Command>(Channel.UNLIMITED)
     private val loopJob = scope.launch {
         for (command in commands) {
-            handle(command)
+            actorThread = Thread.currentThread()
+            try {
+                handle(command)
+            } finally {
+                actorThread = null
+            }
         }
     }
 
@@ -118,14 +155,19 @@ internal class ScriptGuardianSupervisor(
     private var stopJob: Job? = null
     private var retryJob: Job? = null
     private var healthyJob: Job? = null
+    private var firstHeartbeatJob: Job? = null
     private var heartbeatJob: Job? = null
     private var busyWarningJob: Job? = null
     private var heartbeatState: ScriptGuardianHeartbeatReport? = null
+    private var heartbeatRequired = false
     private var backoffIndex = 0
     private var closing: CompletableDeferred<Unit>? = null
 
     @Volatile
     private var currentExecution: ScriptGuardianExecution? = null
+
+    @Volatile
+    private var actorThread: Thread? = null
 
     @Volatile
     private var currentHeartbeatState: ScriptGuardianHeartbeatState? = null
@@ -138,10 +180,17 @@ internal class ScriptGuardianSupervisor(
     }
 
     fun reportHeartbeat(report: ScriptGuardianHeartbeatReport): Boolean {
-        if (report.state == ScriptGuardianHeartbeatState.BUSY) {
-            busyHeartbeatPending = true
+        return awaitBridgeAcknowledgement { request ->
+            Command.Heartbeat(report, request)
         }
-        return commands.trySend(Command.Heartbeat(report)).isSuccess
+    }
+
+    fun expectHeartbeat(sessionId: String): Boolean {
+        val normalizedSessionId = sessionId.trim()
+        if (normalizedSessionId.isEmpty()) return false
+        return awaitBridgeAcknowledgement { request ->
+            Command.ExpectHeartbeat(normalizedSessionId, request)
+        }
     }
 
     fun allowsBackgroundKeyguardGesture(): Boolean =
@@ -157,6 +206,7 @@ internal class ScriptGuardianSupervisor(
     fun closeNow() {
         retryJob?.cancel()
         healthyJob?.cancel()
+        firstHeartbeatJob?.cancel()
         heartbeatJob?.cancel()
         busyWarningJob?.cancel()
         takeoverJob?.cancel()
@@ -178,7 +228,9 @@ internal class ScriptGuardianSupervisor(
             }
 
             is Command.Finished -> executionFinished(command)
-            is Command.Heartbeat -> heartbeat(command.report)
+            is Command.ExpectHeartbeat -> handleExpectedHeartbeat(command)
+            is Command.Heartbeat -> handleHeartbeat(command)
+            is Command.FirstHeartbeatExpired -> firstHeartbeatExpired(command.slotId)
             is Command.HeartbeatExpired -> heartbeatExpired(command)
             is Command.BusyWarning -> busyWarning(command)
             is Command.TakeoverCompleted -> takeoverCompleted(command)
@@ -408,11 +460,50 @@ internal class ScriptGuardianSupervisor(
         commands.close()
     }
 
-    private fun heartbeat(report: ScriptGuardianHeartbeatReport) {
-        val slot = active?.takeIf { it.sessionId == report.sessionId } ?: return
-        val previous = heartbeatState
-        if (previous != null && report.sequence <= previous.sequence) return
+    private fun handleExpectedHeartbeat(command: Command.ExpectHeartbeat) {
+        if (!command.request.claim()) {
+            command.request.result.complete(false)
+            return
+        }
+        val accepted = runCatching {
+            onBridgeRequestClaimed()
+            heartbeatExpected(command.sessionId)
+        }.getOrDefault(false)
+        command.request.result.complete(accepted)
+    }
 
+    private fun handleHeartbeat(command: Command.Heartbeat) {
+        if (!command.request.claim()) {
+            command.request.result.complete(false)
+            return
+        }
+        val status = runCatching {
+            onBridgeRequestClaimed()
+            acceptHeartbeat(command.report)
+        }.getOrNull()
+        command.request.result.complete(status != null)
+        status?.let { acceptedStatus ->
+            runCatching { onStatus(acceptedStatus) }
+        }
+    }
+
+    private fun acceptHeartbeat(
+        report: ScriptGuardianHeartbeatReport
+    ): ScriptGuardianStatus.Running? {
+        if (report.sequence <= 0L) return null
+        if (
+            report.state == ScriptGuardianHeartbeatState.BUSY &&
+            report.commandId.isNullOrBlank()
+        ) {
+            return null
+        }
+        val slot = active?.takeIf { it.sessionId == report.sessionId } ?: return null
+        val previous = heartbeatState
+        if (previous != null && report.sequence <= previous.sequence) return null
+
+        heartbeatRequired = true
+        firstHeartbeatJob?.cancel()
+        firstHeartbeatJob = null
         heartbeatState = report
         currentHeartbeatState = report.state
         busyHeartbeatPending = report.state == ScriptGuardianHeartbeatState.BUSY
@@ -420,7 +511,6 @@ internal class ScriptGuardianSupervisor(
         heartbeatJob = null
         busyWarningJob?.cancel()
         busyWarningJob = null
-        onStatus(ScriptGuardianStatus.Running(slot.file, report))
         when (report.state) {
             ScriptGuardianHeartbeatState.IDLE -> {
                 heartbeatJob = scope.launch {
@@ -436,6 +526,49 @@ internal class ScriptGuardianSupervisor(
                 }
             }
         }
+        return ScriptGuardianStatus.Running(slot.file, report)
+    }
+
+    private fun heartbeatExpected(sessionId: String): Boolean {
+        val slot = active?.takeIf { it.sessionId == sessionId } ?: return false
+        if (heartbeatRequired) return true
+        heartbeatRequired = true
+        if (heartbeatState != null) return true
+        firstHeartbeatJob?.cancel()
+        firstHeartbeatJob = scope.launch {
+            wait(FIRST_HEARTBEAT_TIMEOUT_MILLIS)
+            commands.send(Command.FirstHeartbeatExpired(slot.id))
+        }
+        return true
+    }
+
+    private fun awaitBridgeAcknowledgement(
+        command: (BridgeRequest) -> Command
+    ): Boolean {
+        if (Thread.currentThread() === actorThread || bridgeAckTimeoutMillis <= 0L) return false
+        val request = BridgeRequest()
+        if (!commands.trySend(command(request)).isSuccess) return false
+        val resultBeforeTimeout = runBlocking {
+            withTimeoutOrNull(bridgeAckTimeoutMillis) {
+                request.result.await()
+            }
+        }
+        if (resultBeforeTimeout != null) return resultBeforeTimeout
+        if (request.cancelPending()) return false
+        if (!request.isClaimed()) return false
+        return runBlocking { request.result.await() }
+    }
+
+    private fun firstHeartbeatExpired(slotId: Long) {
+        firstHeartbeatJob = null
+        if (!heartbeatRequired || heartbeatState != null) return
+        val slot = active?.takeIf { it.id == slotId } ?: return
+        beginStop(
+            slot,
+            unexpected = true,
+            retryReason =
+                "first heartbeat timed out after ${FIRST_HEARTBEAT_TIMEOUT_MILLIS / 1_000}s"
+        )
     }
 
     private fun heartbeatExpired(command: Command.HeartbeatExpired) {
@@ -465,11 +598,14 @@ internal class ScriptGuardianSupervisor(
     }
 
     private fun clearHeartbeatState() {
+        firstHeartbeatJob?.cancel()
+        firstHeartbeatJob = null
         heartbeatJob?.cancel()
         heartbeatJob = null
         busyWarningJob?.cancel()
         busyWarningJob = null
         heartbeatState = null
+        heartbeatRequired = false
         currentHeartbeatState = null
         busyHeartbeatPending = false
     }
@@ -483,7 +619,9 @@ internal class ScriptGuardianSupervisor(
         private val BACKOFF_MILLIS = longArrayOf(5_000L, 10_000L, 20_000L, 40_000L, 60_000L)
         private const val HEALTHY_RESET_MILLIS = 120_000L
         private const val STOP_RETRY_MILLIS = 5_000L
+        internal const val FIRST_HEARTBEAT_TIMEOUT_MILLIS = 30_000L
         internal const val IDLE_HEARTBEAT_TIMEOUT_MILLIS = 45_000L
         internal const val BUSY_WARNING_MILLIS = 300_000L
+        internal const val BRIDGE_ACK_TIMEOUT_MILLIS = 1_000L
     }
 }

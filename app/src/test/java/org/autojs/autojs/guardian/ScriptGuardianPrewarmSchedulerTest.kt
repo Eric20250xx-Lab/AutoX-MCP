@@ -263,12 +263,52 @@ class ScriptGuardianPrewarmSchedulerTest {
     }
 
     @Test
-    fun receiverAcceptsOnlyItsExplicitAction() {
-        assertTrue(
-            shouldHandleScriptGuardianPrewarm(ScriptGuardianPrewarmScheduler.ACTION_PREWARM)
+    fun receiverMapsOnlyItsThreeExplicitPackagePrivateActions() {
+        assertEquals(
+            ScriptGuardianPrewarmReceiverAction.SCHEDULED_PREWARM,
+            scriptGuardianPrewarmReceiverAction(
+                ScriptGuardianPrewarmScheduler.ACTION_PREWARM
+            )
         )
-        assertFalse(shouldHandleScriptGuardianPrewarm("android.intent.action.BOOT_COMPLETED"))
-        assertFalse(shouldHandleScriptGuardianPrewarm(null))
+        assertEquals(
+            ScriptGuardianPrewarmReceiverAction.WATCHDOG_REQUEST_RESTORE,
+            scriptGuardianPrewarmReceiverAction(
+                ScriptGuardianPrewarmScheduler.ACTION_WATCHDOG_REQUEST_RESTORE
+            )
+        )
+        assertEquals(
+            ScriptGuardianPrewarmReceiverAction.WATCHDOG_VERIFY_AND_RECOVER,
+            scriptGuardianPrewarmReceiverAction(
+                ScriptGuardianPrewarmScheduler.ACTION_WATCHDOG_VERIFY_AND_RECOVER
+            )
+        )
+        assertEquals(
+            null,
+            scriptGuardianPrewarmReceiverAction("android.intent.action.BOOT_COMPLETED")
+        )
+        assertEquals(null, scriptGuardianPrewarmReceiverAction(null))
+    }
+
+    @Test
+    fun newExactAlarmOccurrenceMapsToVerifyAndRecoverOnly() {
+        assertEquals(
+            ScriptGuardianPrewarmReceiptAction.VERIFY_AND_RECOVER,
+            scriptGuardianPrewarmReceiptAction(
+                ScriptGuardianPrewarmReceiverFlow(
+                    shouldRestore = true,
+                    shouldReconcile = true
+                )
+            )
+        )
+        assertEquals(
+            ScriptGuardianPrewarmReceiptAction.NONE,
+            scriptGuardianPrewarmReceiptAction(
+                ScriptGuardianPrewarmReceiverFlow(
+                    shouldRestore = false,
+                    shouldReconcile = true
+                )
+            )
+        )
     }
 
     private fun assertPlanState(

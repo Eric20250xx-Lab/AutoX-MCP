@@ -178,9 +178,11 @@
     <string name="script_guardian_prewarm_invalid_input">请输入有效时间，例如 08:15,17:45</string>
     <string name="text_script_guardian_background_status">后台保活准备</string>
     <string name="summary_script_guardian_background_status_waiting">正在读取后台保活状态</string>
-    <string name="summary_script_guardian_background_status">%1$s · Guardian %2$s · %3$s%4$s。realme 自启动和后台活动仍需在系统设置中确认</string>
+    <string name="summary_script_guardian_background_status">%1$s · Guardian %2$s · %3$s%4$s%5$s。realme 自启动和后台活动仍需在系统设置中确认</string>
     <string name="script_guardian_battery_ready">电池优化已放行</string>
     <string name="script_guardian_battery_action_required">需要允许忽略电池优化，点击设置</string>
+    <string name="script_guardian_exact_alarm_ready">“闹钟和提醒”权限已允许</string>
+    <string name="script_guardian_exact_alarm_action_required">看门狗恢复需要“闹钟和提醒”权限，点击授权</string>
     <string name="script_guardian_device_idle">（设备当前处于 Doze）</string>
     <string name="script_guardian_wake_lock_held">CPU 保活有效</string>
     <string name="script_guardian_wake_lock_released">CPU 保活未生效</string>
@@ -205,6 +207,14 @@
     <string name="script_guardian_status_stopping">正在停止：%1$s</string>
     <string name="script_guardian_status_retrying">%1$d 秒后重试 %2$s：%3$s</string>
     <string name="script_guardian_status_stopped">已停止</string>
+    <string name="script_guardian_watchdog_channel_name">脚本守护进程检查</string>
+    <string name="script_guardian_watchdog_channel_description">检查并恢复 AutoX 主进程连接</string>
+    <string name="script_guardian_watchdog_title">脚本守护进程检查</string>
+    <string name="script_guardian_watchdog_starting">正在确认主进程状态</string>
+    <string name="script_guardian_watchdog_healthy">主进程响应正常</string>
+    <string name="script_guardian_watchdog_suspect">主进程暂未响应，正在复查</string>
+    <string name="script_guardian_watchdog_restoring">正在请求恢复主进程</string>
+    <string name="script_guardian_watchdog_unresponsive">主进程仍未响应，已请求再次恢复</string>
     <string name="text_layout_inspector_is_dumping">布局分析中</string>
     <string name="text_force_stop">强制停止</string>
     <string name="text_execution_finished" formatted="false">\n------------\n[%s]运行结束，用时%f秒</string>

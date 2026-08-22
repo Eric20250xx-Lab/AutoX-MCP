@@ -41,6 +41,7 @@ class ScriptGuardianRestoreReceiver : BroadcastReceiver() {
 
         if (shouldRestore) {
             ScriptGuardianDiagnostics.recordRestoreAction(context, action)
+            ScriptGuardianRuntimeDiagnostics.recordRestore(action)
             ScriptGuardianService.restore(context)
         }
         if (shouldRebuildPrewarm) {

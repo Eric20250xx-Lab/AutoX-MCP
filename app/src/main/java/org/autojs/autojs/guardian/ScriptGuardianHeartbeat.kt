@@ -22,6 +22,20 @@ object ScriptGuardianHeartbeat {
     const val SESSION_ARGUMENT = "scriptGuardianSessionId"
 
     private val sink = AtomicReference<((ScriptGuardianHeartbeatReport) -> Boolean)?>(null)
+    private val expectationSink = AtomicReference<((String) -> Boolean)?>(null)
+
+    /**
+     * Opts the current guarded script into heartbeat enforcement. Heartbeat-aware scripts must
+     * call this before doing network or business work so a failed startup is retried safely.
+     */
+    @JvmStatic
+    fun expect(sessionId: String?): Boolean {
+        val normalizedSessionId = sessionId?.trim().orEmpty()
+        if (normalizedSessionId.isEmpty()) return false
+        return runCatching {
+            expectationSink.get()?.invoke(normalizedSessionId) == true
+        }.getOrDefault(false)
+    }
 
     @JvmStatic
     fun reportIdle(sessionId: String?, sequence: Long): Boolean = publish(
@@ -45,6 +59,14 @@ object ScriptGuardianHeartbeat {
 
     internal fun unbind(listener: (ScriptGuardianHeartbeatReport) -> Boolean) {
         sink.compareAndSet(listener, null)
+    }
+
+    internal fun bindExpectation(listener: (String) -> Boolean) {
+        expectationSink.set(listener)
+    }
+
+    internal fun unbindExpectation(listener: (String) -> Boolean) {
+        expectationSink.compareAndSet(listener, null)
     }
 
     private fun publish(

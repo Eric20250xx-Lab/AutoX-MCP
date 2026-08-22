@@ -192,6 +192,20 @@
                 android:value="Keeps one user-configured AutoX automation script running" />
         </service>
 
+        <service
+            android:name="org.autojs.autojs.guardian.ScriptGuardianProcessProbeService"
+            android:exported="false" />
+
+        <service
+            android:name="org.autojs.autojs.guardian.ScriptGuardianWatchdogService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse"
+            android:process=":guardian">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Checks and restores the user-enabled Script Guardian main process" />
+        </service>
+
         <receiver
             android:name="org.autojs.autojs.guardian.ScriptGuardianRestoreReceiver"
             android:enabled="true"

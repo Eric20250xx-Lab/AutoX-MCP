@@ -12,6 +12,7 @@ import io.ktor.server.application.install
 import io.ktor.server.engine.ApplicationEngine
 import io.ktor.server.engine.embeddedServer
 import io.ktor.server.netty.Netty
+import io.ktor.server.plugins.origin
 import io.ktor.server.request.receiveText
 import io.ktor.server.response.respond
 import io.ktor.server.response.respondText
@@ -19,22 +20,19 @@ import io.ktor.server.routing.post
 import io.ktor.server.routing.get
 import io.ktor.server.routing.routing
 import io.ktor.server.websocket.WebSockets
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.SupervisorJob
 import org.autojs.autoxjs.mcp.tool.ToolRegistry
 import java.net.NetworkInterface
 
 /**
  * Lightweight MCP server wrapper based on Ktor.
  */
-class McpServer(
+class McpServer internal constructor(
     private val appContext: Context,
-    private val registry: ToolRegistry
+    private val registry: ToolRegistry,
+    private val healthSupervisor: McpSelfHealthSupervisor
 ) {
     private val gson = Gson()
     private var engine: ApplicationEngine? = null
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val jsonRpcHandler = McpJsonRpcHandler(
         registry,
         serverInfoProvider = { buildServerInfo() }
@@ -49,6 +47,7 @@ class McpServer(
         if (!config.enabled) return false
         Log.i(TAG, "Starting MCP server on ${config.host}:${config.port}")
         var candidate: ApplicationEngine? = null
+        val identity = healthSupervisor.beginEngineStart()
         try {
             val newEngine = embeddedServer(Netty, port = config.port, host = config.host) {
                 install(WebSockets)
@@ -93,6 +92,18 @@ class McpServer(
                         call.respond(HttpStatusCode.MethodNotAllowed)
                     }
 
+                    get("/healthz") {
+                        if (!isSameDeviceRemoteAddress(call.request.origin.remoteAddress)) {
+                            call.respond(HttpStatusCode.Forbidden)
+                            return@get
+                        }
+                        call.respondText(
+                            gson.toJson(healthSupervisor.payload(identity)),
+                            ContentType.Application.Json,
+                            HttpStatusCode.OK
+                        )
+                    }
+
                     get("/") {
                         call.respondText("MCP Server Running", ContentType.Text.Plain)
                     }
@@ -102,6 +113,7 @@ class McpServer(
             Log.i(TAG, "Engine created, starting...")
             newEngine.start(wait = false)
             engine = newEngine
+            healthSupervisor.engineStartSucceeded(identity)
             Log.i(TAG, "Engine started successfully")
             Log.i(TAG, "MCP server started on ${config.host}:${config.port}")
             return true
@@ -113,6 +125,7 @@ class McpServer(
                 Log.w(TAG, "Failed to clean up MCP server after start failure", stopError)
             }
             engine = null
+            healthSupervisor.engineStartFailed(identity)
             return false
         }
     }

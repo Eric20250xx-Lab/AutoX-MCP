@@ -2,8 +2,10 @@ package org.autojs.autojs.guardian
 
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.yield
@@ -14,6 +16,13 @@ import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import java.io.File
+import java.util.ArrayDeque
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
+import kotlin.coroutines.CoroutineContext
 
 class ScriptGuardianSupervisorTest {
     private lateinit var scope: CoroutineScope
@@ -182,6 +191,214 @@ class ScriptGuardianSupervisorTest {
     }
 
     @Test
+    fun heartbeatRequiredSessionStopsAndRetriesAfterMissingFirstHeartbeat() = runBlocking {
+        supervisor.reconcile(A)
+        yield()
+        val sessionId = runner.starts.single().sessionId
+
+        assertFalse(supervisor.expectHeartbeat("wrong-session"))
+        assertTrue(supervisor.expectHeartbeat(sessionId))
+        yield()
+
+        assertTrue(waits.hasPending(ScriptGuardianSupervisor.FIRST_HEARTBEAT_TIMEOUT_MILLIS))
+        waits.release(ScriptGuardianSupervisor.FIRST_HEARTBEAT_TIMEOUT_MILLIS)
+        yield()
+
+        assertEquals(1, runner.stopped.size)
+        assertTrue(waits.hasPending(5_000L))
+        val retry = statuses.filterIsInstance<ScriptGuardianStatus.Retrying>().last()
+        assertEquals("first heartbeat timed out after 30s", retry.reason)
+    }
+
+    @Test
+    fun arbitraryScriptWithoutHeartbeatNegotiationIsNotRetriedForSilence() = runBlocking {
+        supervisor.reconcile(A)
+        yield()
+
+        assertFalse(waits.hasPending(ScriptGuardianSupervisor.FIRST_HEARTBEAT_TIMEOUT_MILLIS))
+        assertTrue(runner.stopped.isEmpty())
+        assertEquals(1, runner.startAttempts)
+    }
+
+    @Test
+    fun bridgeReturnsActualSessionAndMonotonicSequenceDecision() = runBlocking {
+        supervisor.reconcile(A)
+        yield()
+        val sessionId = runner.starts.single().sessionId
+
+        assertTrue(supervisor.expectHeartbeat(sessionId))
+        assertTrue(
+            supervisor.reportHeartbeat(
+                heartbeat(sessionId, 1L, ScriptGuardianHeartbeatState.IDLE)
+            )
+        )
+        assertFalse(
+            supervisor.reportHeartbeat(
+                heartbeat(sessionId, 1L, ScriptGuardianHeartbeatState.IDLE)
+            )
+        )
+        assertTrue(
+            supervisor.reportHeartbeat(
+                heartbeat(sessionId, 2L, ScriptGuardianHeartbeatState.BUSY, "command-1")
+            )
+        )
+    }
+
+    @Test
+    fun invalidatedSessionIsRejectedByActorAfterReplacementStarts() = runBlocking {
+        supervisor.reconcile(A)
+        yield()
+        val oldSessionId = runner.starts.single().sessionId
+
+        supervisor.reconcile(B)
+        yield()
+        val currentSessionId = runner.starts.last().sessionId
+
+        assertFalse(supervisor.expectHeartbeat(oldSessionId))
+        assertFalse(
+            supervisor.reportHeartbeat(
+                heartbeat(oldSessionId, 1L, ScriptGuardianHeartbeatState.IDLE)
+            )
+        )
+        assertTrue(supervisor.expectHeartbeat(currentSessionId))
+    }
+
+    @Test
+    fun actorThreadBridgeCallFailsWithoutSelfDeadlock() = runBlocking {
+        val localRunner = FakeRunner()
+        lateinit var localSupervisor: ScriptGuardianSupervisor
+        var actorDecision: Boolean? = null
+        localSupervisor = ScriptGuardianSupervisor(
+            scope = scope,
+            runner = localRunner,
+            wait = waits::await,
+            onStatus = { status ->
+                if (status is ScriptGuardianStatus.Running && actorDecision == null) {
+                    actorDecision = localSupervisor.expectHeartbeat(
+                        localRunner.starts.single().sessionId
+                    )
+                }
+            }
+        )
+        try {
+            localSupervisor.reconcile(A)
+            yield()
+            assertEquals(false, actorDecision)
+        } finally {
+            localSupervisor.closeNow()
+        }
+    }
+
+    @Test
+    fun timeoutBeforeClaimReturnsFalseWithoutApplyingHeartbeatExpectation() {
+        val dispatcher = PausedDispatcher()
+        val localScope = CoroutineScope(SupervisorJob() + dispatcher)
+        val localRunner = FakeRunner()
+        val localSupervisor = ScriptGuardianSupervisor(
+            scope = localScope,
+            runner = localRunner,
+            wait = waits::await,
+            bridgeAckTimeoutMillis = 10L
+        )
+        try {
+            dispatcher.runUntilIdle()
+            localSupervisor.reconcile(A)
+            dispatcher.runUntilIdle()
+            val sessionId = localRunner.starts.single().sessionId
+
+            assertFalse(localSupervisor.expectHeartbeat(sessionId))
+            dispatcher.runUntilIdle()
+            assertFalse(
+                waits.hasPending(ScriptGuardianSupervisor.FIRST_HEARTBEAT_TIMEOUT_MILLIS)
+            )
+        } finally {
+            localSupervisor.closeNow()
+            localScope.cancel()
+        }
+    }
+
+    @Test
+    fun claimedBridgeRequestWaitsForActualResultAfterAckDeadline() {
+        val claimed = CountDownLatch(1)
+        val releaseClaim = CountDownLatch(1)
+        val started = CountDownLatch(1)
+        val returned = CountDownLatch(1)
+        val blockFirstClaim = AtomicBoolean(true)
+        val bridgeResult = AtomicReference<Boolean>()
+        val dispatcher = Executors.newSingleThreadExecutor().asCoroutineDispatcher()
+        val localScope = CoroutineScope(SupervisorJob() + dispatcher)
+        val localRunner = FakeRunner()
+        val localSupervisor = ScriptGuardianSupervisor(
+            scope = localScope,
+            runner = localRunner,
+            wait = waits::await,
+            onStatus = { status ->
+                if (status is ScriptGuardianStatus.Running) started.countDown()
+            },
+            bridgeAckTimeoutMillis = 10L,
+            onBridgeRequestClaimed = {
+                if (blockFirstClaim.compareAndSet(true, false)) {
+                    claimed.countDown()
+                    releaseClaim.await()
+                }
+            }
+        )
+        try {
+            localSupervisor.reconcile(A)
+            assertTrue(started.await(1L, TimeUnit.SECONDS))
+            val sessionId = localRunner.starts.single().sessionId
+            val bridgeThread = Thread {
+                bridgeResult.set(
+                    localSupervisor.reportHeartbeat(
+                        heartbeat(sessionId, 1L, ScriptGuardianHeartbeatState.IDLE)
+                    )
+                )
+                returned.countDown()
+            }
+            bridgeThread.start()
+
+            assertTrue(claimed.await(1L, TimeUnit.SECONDS))
+            assertFalse(returned.await(50L, TimeUnit.MILLISECONDS))
+            releaseClaim.countDown()
+            assertTrue(returned.await(1L, TimeUnit.SECONDS))
+            bridgeThread.join(1_000L)
+
+            assertEquals(true, bridgeResult.get())
+            assertTrue(localSupervisor.allowsBackgroundKeyguardGesture())
+            assertFalse(
+                localSupervisor.reportHeartbeat(
+                    heartbeat(sessionId, 1L, ScriptGuardianHeartbeatState.IDLE)
+                )
+            )
+        } finally {
+            releaseClaim.countDown()
+            localSupervisor.closeNow()
+            localScope.cancel()
+            dispatcher.close()
+        }
+    }
+
+    @Test
+    fun firstBusyHeartbeatCancelsStartupTimeoutWithoutArmingIdleRestart() = runBlocking {
+        supervisor.reconcile(A)
+        yield()
+        val sessionId = runner.starts.single().sessionId
+
+        supervisor.expectHeartbeat(sessionId)
+        yield()
+
+        supervisor.reportHeartbeat(
+            heartbeat(sessionId, 1L, ScriptGuardianHeartbeatState.BUSY, "command-1")
+        )
+        yield()
+
+        assertFalse(waits.hasPending(ScriptGuardianSupervisor.FIRST_HEARTBEAT_TIMEOUT_MILLIS))
+        assertFalse(waits.hasPending(ScriptGuardianSupervisor.IDLE_HEARTBEAT_TIMEOUT_MILLIS))
+        assertTrue(waits.hasPending(ScriptGuardianSupervisor.BUSY_WARNING_MILLIS))
+        assertTrue(runner.stopped.isEmpty())
+    }
+
+    @Test
     fun idleHeartbeatTimeoutStopsAndRestartsOnlyCurrentSession() = runBlocking {
         supervisor.reconcile(A)
         yield()
@@ -230,15 +447,25 @@ class ScriptGuardianSupervisorTest {
         yield()
         val sessionId = runner.starts.single().sessionId
 
-        supervisor.reportHeartbeat(
-            heartbeat("wrong-session", 1L, ScriptGuardianHeartbeatState.IDLE)
+        assertFalse(
+            supervisor.reportHeartbeat(
+                heartbeat("wrong-session", 1L, ScriptGuardianHeartbeatState.IDLE)
+            )
         )
         yield()
         assertFalse(waits.hasPending(ScriptGuardianSupervisor.IDLE_HEARTBEAT_TIMEOUT_MILLIS))
 
-        supervisor.reportHeartbeat(heartbeat(sessionId, 2L, ScriptGuardianHeartbeatState.BUSY))
+        assertTrue(
+            supervisor.reportHeartbeat(
+                heartbeat(sessionId, 2L, ScriptGuardianHeartbeatState.BUSY, "command-1")
+            )
+        )
         yield()
-        supervisor.reportHeartbeat(heartbeat(sessionId, 1L, ScriptGuardianHeartbeatState.IDLE))
+        assertFalse(
+            supervisor.reportHeartbeat(
+                heartbeat(sessionId, 1L, ScriptGuardianHeartbeatState.IDLE)
+            )
+        )
         yield()
 
         assertFalse(waits.hasPending(ScriptGuardianSupervisor.IDLE_HEARTBEAT_TIMEOUT_MILLIS))
@@ -445,6 +672,20 @@ class ScriptGuardianSupervisorTest {
 
         fun release(delayMillis: Long) {
             pending.first { it.delayMillis == delayMillis }.gate.complete(Unit)
+        }
+    }
+
+    private class PausedDispatcher : CoroutineDispatcher() {
+        private val tasks = ArrayDeque<Runnable>()
+
+        override fun dispatch(context: CoroutineContext, block: Runnable) {
+            tasks.addLast(block)
+        }
+
+        fun runUntilIdle() {
+            while (tasks.isNotEmpty()) {
+                tasks.removeFirst().run()
+            }
         }
     }
 

@@ -143,9 +143,11 @@
   <string name="script_guardian_prewarm_invalid_input">Enter valid times, for example 08:15,17:45</string>
   <string name="text_script_guardian_background_status">Background readiness</string>
   <string name="summary_script_guardian_background_status_waiting">Reading background readiness</string>
-  <string name="summary_script_guardian_background_status">%1$s · Guardian %2$s · %3$s%4$s. realme auto-launch and background activity still require confirmation in system settings</string>
+  <string name="summary_script_guardian_background_status">%1$s · Guardian %2$s · %3$s%4$s%5$s. realme auto-launch and background activity still require confirmation in system settings</string>
   <string name="script_guardian_battery_ready">Battery optimization exemption granted</string>
   <string name="script_guardian_battery_action_required">Allow ignoring battery optimization; tap to configure</string>
+  <string name="script_guardian_exact_alarm_ready">Alarms &amp; reminders access granted</string>
+  <string name="script_guardian_exact_alarm_action_required">Watchdog recovery needs Alarms &amp; reminders access; tap to grant</string>
   <string name="script_guardian_device_idle"> (device is currently in Doze)</string>
   <string name="script_guardian_wake_lock_held">CPU keep-alive active</string>
   <string name="script_guardian_wake_lock_released">CPU keep-alive inactive</string>
@@ -170,6 +172,14 @@
   <string name="script_guardian_status_stopping">Stopping: %1$s</string>
   <string name="script_guardian_status_retrying">Retrying %2$s in %1$d seconds: %3$s</string>
   <string name="script_guardian_status_stopped">Stopped</string>
+  <string name="script_guardian_watchdog_channel_name">Script guardian process check</string>
+  <string name="script_guardian_watchdog_channel_description">Checks and restores the AutoX main-process connection</string>
+  <string name="script_guardian_watchdog_title">Script guardian process check</string>
+  <string name="script_guardian_watchdog_starting">Confirming main-process status</string>
+  <string name="script_guardian_watchdog_healthy">Main process is responding</string>
+  <string name="script_guardian_watchdog_suspect">Main process did not respond; checking again</string>
+  <string name="script_guardian_watchdog_restoring">Requesting main-process recovery</string>
+  <string name="script_guardian_watchdog_unresponsive">Main process still did not respond; recovery requested again</string>
   <string name="text_layout_inspector_is_dumping">Layout analysis in progress</string>
   <string name="text_force_stop">Forced stop</string>
   <string name="text_execution_finished" formatted="false">\n ------------ \n [ %s ] Finished running in %f seconds</string>

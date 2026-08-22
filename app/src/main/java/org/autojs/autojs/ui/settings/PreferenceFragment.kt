@@ -19,6 +19,7 @@ import android.widget.Toast
 import androidx.preference.EditTextPreference
 import androidx.preference.Preference
 import androidx.preference.PreferenceFragmentCompat
+import androidx.preference.PreferenceManager
 import androidx.preference.SwitchPreference
 import com.stardust.pio.PFiles
 import de.psdev.licensesdialog.LicensesDialog
@@ -28,6 +29,7 @@ import org.autojs.autojs.guardian.ScriptGuardianDiagnostics
 import org.autojs.autojs.guardian.ScriptGuardianPrewarmPrefs
 import org.autojs.autojs.guardian.ScriptGuardianPrewarmScheduler
 import org.autojs.autojs.guardian.ScriptGuardianPrewarmSnapshot
+import org.autojs.autojs.guardian.ScriptGuardianPrefs
 import org.autojs.autojs.guardian.parseScriptGuardianPrewarmTimes
 import org.autojs.autojs.ui.widget.CommonMarkdownView
 import org.autojs.autoxjs.R
@@ -140,6 +142,12 @@ class PreferenceFragment : PreferenceFragmentCompat() {
         ) ?: return
         val context = requireContext()
         val powerManager = context.getSystemService(PowerManager::class.java)
+        val guardianEnabled = PreferenceManager.getDefaultSharedPreferences(context)
+            .getBoolean(ScriptGuardianPrefs.KEY_ENABLED, false)
+        val exactAlarmReadiness = scriptGuardianExactAlarmReadiness(
+            guardianEnabled = guardianEnabled,
+            exactAlarmAllowed = ScriptGuardianPrewarmScheduler.canScheduleExactAlarms(context)
+        )
         val batteryText = buildString {
             append(
                 getString(
@@ -198,12 +206,22 @@ class PreferenceFragment : PreferenceFragmentCompat() {
                 )
             )
         }.orEmpty()
+        val exactAlarmText = when (exactAlarmReadiness) {
+            ScriptGuardianExactAlarmReadiness.NOT_APPLICABLE -> ""
+            ScriptGuardianExactAlarmReadiness.READY -> getString(
+                R.string.script_guardian_exact_alarm_ready
+            )
+            ScriptGuardianExactAlarmReadiness.REQUIRED -> getString(
+                R.string.script_guardian_exact_alarm_action_required
+            )
+        }.takeIf { it.isNotEmpty() }?.let { " · $it" }.orEmpty()
         preference.summary = getString(
             R.string.summary_script_guardian_background_status,
             batteryText,
             stateText,
             wakeLockText,
-            heartbeatText
+            heartbeatText,
+            exactAlarmText
         )
     }
 
@@ -271,11 +289,31 @@ class PreferenceFragment : PreferenceFragmentCompat() {
     private fun openScriptGuardianBackgroundSettings(activity: Activity) {
         val powerManager = activity.getSystemService(PowerManager::class.java)
         val packageUri = Uri.parse("package:${activity.packageName}")
-        val primary = if (powerManager.isIgnoringBatteryOptimizations(activity.packageName)) {
-            Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, packageUri)
-        } else {
-            Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, packageUri)
+        val guardianEnabled = PreferenceManager.getDefaultSharedPreferences(activity)
+            .getBoolean(ScriptGuardianPrefs.KEY_ENABLED, false)
+        when (
+            scriptGuardianBackgroundSettingsAction(
+                guardianEnabled = guardianEnabled,
+                exactAlarmAllowed = ScriptGuardianPrewarmScheduler.canScheduleExactAlarms(activity),
+                batteryOptimizationExempt = powerManager.isIgnoringBatteryOptimizations(
+                    activity.packageName
+                )
+            )
+        ) {
+            ScriptGuardianBackgroundSettingsAction.EXACT_ALARM -> {
+                openScriptGuardianExactAlarmSettings(activity)
+                return
+            }
+
+            ScriptGuardianBackgroundSettingsAction.BATTERY_OPTIMIZATION -> Unit
+            ScriptGuardianBackgroundSettingsAction.APP_DETAILS -> {
+                activity.startActivity(
+                    Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, packageUri)
+                )
+                return
+            }
         }
+        val primary = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, packageUri)
         try {
             activity.startActivity(primary)
         } catch (_: ActivityNotFoundException) {
@@ -324,4 +362,38 @@ class PreferenceFragment : PreferenceFragmentCompat() {
                 .show()
         }
     }
+}
+
+internal enum class ScriptGuardianExactAlarmReadiness {
+    NOT_APPLICABLE,
+    READY,
+    REQUIRED
+}
+
+internal enum class ScriptGuardianBackgroundSettingsAction {
+    EXACT_ALARM,
+    BATTERY_OPTIMIZATION,
+    APP_DETAILS
+}
+
+internal fun scriptGuardianExactAlarmReadiness(
+    guardianEnabled: Boolean,
+    exactAlarmAllowed: Boolean
+): ScriptGuardianExactAlarmReadiness = when {
+    !guardianEnabled -> ScriptGuardianExactAlarmReadiness.NOT_APPLICABLE
+    exactAlarmAllowed -> ScriptGuardianExactAlarmReadiness.READY
+    else -> ScriptGuardianExactAlarmReadiness.REQUIRED
+}
+
+internal fun scriptGuardianBackgroundSettingsAction(
+    guardianEnabled: Boolean,
+    exactAlarmAllowed: Boolean,
+    batteryOptimizationExempt: Boolean
+): ScriptGuardianBackgroundSettingsAction = when {
+    scriptGuardianExactAlarmReadiness(guardianEnabled, exactAlarmAllowed) ==
+        ScriptGuardianExactAlarmReadiness.REQUIRED ->
+        ScriptGuardianBackgroundSettingsAction.EXACT_ALARM
+
+    !batteryOptimizationExempt -> ScriptGuardianBackgroundSettingsAction.BATTERY_OPTIMIZATION
+    else -> ScriptGuardianBackgroundSettingsAction.APP_DETAILS
 }
