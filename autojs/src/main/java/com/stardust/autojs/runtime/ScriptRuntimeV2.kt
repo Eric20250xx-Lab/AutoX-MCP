@@ -139,6 +139,7 @@ class ScriptRuntimeV2(val builder: Builder) : ScriptRuntime(builder) {
     }
 
     override fun onExit() {
+        automator.close()
         super.onExit()
         mutableOkHttp.destroy()
         weakReferenceKey.release()
@@ -191,5 +192,4 @@ class ScriptRuntimeV2(val builder: Builder) : ScriptRuntime(builder) {
         }
     }
 }
-
 

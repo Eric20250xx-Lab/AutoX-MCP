@@ -131,7 +131,7 @@
   <string name="text_script_guardian_path">Guardian script path</string>
   <string name="summary_script_guardian_path">Path relative to the AutoX script directory, for example: receiver.js</string>
   <string name="text_script_guardian_keep_screen_on_while_charging">Keep screen on while charging</string>
-  <string name="summary_script_guardian_keep_screen_on_while_charging">Keeps the screen on while a valid guarded script is running and the device is plugged in; every detected screen-off starts up to two attempts to turn it back on without unlocking. Unplug the device or turn off this setting to stop recovery</string>
+  <string name="summary_script_guardian_keep_screen_on_while_charging">Keeps the screen on while a valid guarded script is running and the device is plugged in; every detected screen-off starts up to two wake attempts. It never bypasses a secure PIN, password, or pattern lock, but Accessibility may dismiss a non-secure swipe keyguard. Unplug the device or turn off this setting to stop recovery</string>
   <string name="text_script_guardian_prewarm_enable">Schedule Guardian prewarm</string>
   <string name="summary_script_guardian_prewarm_disabled">Off; prewarm only restores Guardian and never runs a business action</string>
   <string name="summary_script_guardian_prewarm_scheduled">Daily at %1$s; next wake %2$s</string>

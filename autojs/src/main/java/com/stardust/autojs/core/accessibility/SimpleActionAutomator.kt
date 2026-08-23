@@ -61,6 +61,9 @@ class SimpleActionAutomator(
 ) {
 
     private lateinit var mGlobalActionAutomator: GlobalActionAutomator
+    private val gestureLifecycleLock = Any()
+    @Volatile
+    private var gesturesClosed = false
 
     private var mScreenMetrics: ScreenMetrics? = null
 
@@ -380,30 +383,31 @@ class SimpleActionAutomator(
 
     @ScriptInterface
     fun gesture(start: Long, duration: Long, vararg points: IntArray): Boolean {
-        prepareForGesture()
+        if (!prepareForGesture()) return false
         return mGlobalActionAutomator.gesture(start, duration, *points)
     }
 
     fun gestureAsync(start: Long, duration: Long, vararg points: IntArray) {
-        prepareForGesture()
+        if (!prepareForGesture()) return
         mGlobalActionAutomator.gestureAsync(start, duration, *points)
     }
 
     fun gestures(strokes: Any): Boolean {
-        prepareForGesture()
+        if (!prepareForGesture()) return false
         @Suppress("UNCHECKED_CAST")
         return mGlobalActionAutomator.gestures(*strokes as Array<GestureDescription.StrokeDescription>)
     }
 
     //如果这里用GestureDescription.StrokeDescription[]为参数，安卓7.0以下会因为找不到这个类而报错
     fun gesturesAsync(strokes: Any) {
-        prepareForGesture()
+        if (!prepareForGesture()) return
         @Suppress("UNCHECKED_CAST")
         mGlobalActionAutomator.gesturesAsync(*strokes as Array<GestureDescription.StrokeDescription>)
     }
 
-    private fun prepareForGesture() {
+    private fun prepareForGesture(): Boolean = synchronized(gestureLifecycleLock) {
         ScriptRuntime.requiresApi(24)
+        if (gesturesClosed) return@synchronized false
         if (!::mGlobalActionAutomator.isInitialized) {
             mGlobalActionAutomator =
                 GlobalActionAutomator(handler()) {
@@ -412,30 +416,38 @@ class SimpleActionAutomator(
                 }
         }
         mGlobalActionAutomator.setScreenMetrics(mScreenMetrics)
+        true
     }
 
     @ScriptInterface
     fun click(x: Int, y: Int): Boolean {
-        prepareForGesture()
+        if (!prepareForGesture()) return false
         return mGlobalActionAutomator.click(x, y)
     }
 
     @ScriptInterface
     fun press(x: Int, y: Int, delay: Int): Boolean {
-        prepareForGesture()
+        if (!prepareForGesture()) return false
         return mGlobalActionAutomator.press(x, y, delay)
     }
 
     @ScriptInterface
     fun longClick(x: Int, y: Int): Boolean {
-        prepareForGesture()
+        if (!prepareForGesture()) return false
         return mGlobalActionAutomator.longClick(x, y)
     }
 
     @ScriptInterface
     fun swipe(x1: Int, y1: Int, x2: Int, y2: Int, delay: Int): Boolean {
-        prepareForGesture()
+        if (!prepareForGesture()) return false
         return mGlobalActionAutomator.swipe(x1, y1, x2, y2, delay.toLong())
+    }
+
+    fun close() = synchronized(gestureLifecycleLock) {
+        gesturesClosed = true
+        if (::mGlobalActionAutomator.isInitialized) {
+            mGlobalActionAutomator.close()
+        }
     }
 
     private fun performGlobalAction(action: Int): Boolean {

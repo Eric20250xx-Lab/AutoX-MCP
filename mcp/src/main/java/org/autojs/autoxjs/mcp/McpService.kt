@@ -140,17 +140,26 @@ class McpService internal constructor(
             val identity = healthSupervisor.expectedIdentity() ?: return
             McpSelfProbeTarget(config, identity)
         }
-        when (val result = healthProbe.probe(probeTarget.config, probeTarget.identity)) {
-            McpProbeResult.Success -> healthSupervisor.recordProbeSuccess(probeTarget.identity)
-            is McpProbeResult.Failure -> {
-                when (healthSupervisor.recordProbeFailure(probeTarget.identity, result.errorCode)) {
-                    McpRecoveryAction.RESTART_ENGINE -> restartEngineOnly(
-                        expectedIdentity = probeTarget.identity,
-                        expectedConfig = probeTarget.config
-                    )
-                    McpRecoveryAction.NONE,
-                    McpRecoveryAction.RATE_LIMITED -> Unit
-                }
+        val result = healthProbe.probe(probeTarget.config, probeTarget.identity)
+        // start(), stop(), and engine restart use this same monitor.
+        synchronized(this) {
+            when (
+                recordMcpProbeResultIfCurrent(
+                    activeConfig = activeConfig,
+                    currentIdentity = healthSupervisor.expectedIdentity(),
+                    probeTarget = probeTarget,
+                    result = result,
+                    recordSuccess = healthSupervisor::recordProbeSuccess,
+                    recordFailure = healthSupervisor::recordProbeFailure
+                )
+            ) {
+                McpRecoveryAction.RESTART_ENGINE -> restartEngineOnly(
+                    expectedIdentity = probeTarget.identity,
+                    expectedConfig = probeTarget.config
+                )
+                McpRecoveryAction.NONE,
+                McpRecoveryAction.RATE_LIMITED,
+                null -> Unit
             }
         }
     }
@@ -561,6 +570,28 @@ internal data class McpSelfProbeTarget(
     val config: McpConfig,
     val identity: McpEngineIdentity
 )
+
+internal fun recordMcpProbeResultIfCurrent(
+    activeConfig: McpConfig?,
+    currentIdentity: McpEngineIdentity?,
+    probeTarget: McpSelfProbeTarget,
+    result: McpProbeResult,
+    recordSuccess: (McpEngineIdentity) -> Unit,
+    recordFailure: (McpEngineIdentity, String) -> McpRecoveryAction
+): McpRecoveryAction? {
+    if (activeConfig != probeTarget.config || currentIdentity != probeTarget.identity) {
+        return null
+    }
+    return when (result) {
+        McpProbeResult.Success -> {
+            recordSuccess(probeTarget.identity)
+            McpRecoveryAction.NONE
+        }
+
+        is McpProbeResult.Failure ->
+            recordFailure(probeTarget.identity, result.errorCode)
+    }
+}
 
 internal fun runMcpEngineRestartIfCurrent(
     activeConfig: McpConfig?,

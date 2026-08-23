@@ -211,8 +211,12 @@ internal class ScriptGuardianSupervisor(
         busyWarningJob?.cancel()
         takeoverJob?.cancel()
         stopJob?.cancel()
-        currentExecution?.let { execution ->
-            runCatching { runner.stopNow(execution) }
+        if (currentHeartbeatState == ScriptGuardianHeartbeatState.IDLE &&
+            !busyHeartbeatPending
+        ) {
+            currentExecution?.let { execution ->
+                runCatching { runner.stopNow(execution) }
+            }
         }
         commands.close()
         loopJob.cancel()
@@ -264,12 +268,11 @@ internal class ScriptGuardianSupervisor(
         retryJob = null
         healthyJob?.cancel()
         healthyJob = null
-        clearHeartbeatState()
-
-        active?.let {
-            beginStop(it, unexpected = false)
+        active?.let { slot ->
+            stopActiveIfProvenIdle(slot)
             return
         }
+        clearHeartbeatState()
         if (stopping == null && takeoverGeneration == null) {
             reconcileCurrent()
         }
@@ -290,17 +293,16 @@ internal class ScriptGuardianSupervisor(
         takeoverJob = scope.launch {
             val result = runCatching {
                 val existing = runner.findRunning(target.file)
-                for (execution in existing) {
-                    check(runner.stopAndAwait(execution)) {
-                        "existing script did not stop"
-                    }
+                check(existing.isEmpty()) {
+                    "existing script state is unknown; waiting for it to stop"
                 }
             }
             commands.send(
                 Command.TakeoverCompleted(
                     generation = target.generation,
                     success = result.isSuccess,
-                    reason = result.exceptionOrNull()?.message ?: "existing script did not stop"
+                    reason = result.exceptionOrNull()?.message
+                        ?: "existing script state is unknown"
                 )
             )
         }
@@ -444,12 +446,25 @@ internal class ScriptGuardianSupervisor(
         retryJob = null
         healthyJob?.cancel()
         healthyJob = null
-        clearHeartbeatState()
-        active?.let {
-            beginStop(it, unexpected = false)
+        active?.let { slot ->
+            stopActiveIfProvenIdle(slot)
             return
         }
+        clearHeartbeatState()
         finishCloseIfIdle()
+    }
+
+    private fun stopActiveIfProvenIdle(slot: Slot) {
+        if (active?.id != slot.id) return
+        val report = heartbeatState?.takeIf {
+            it.sessionId == slot.sessionId && it.state == ScriptGuardianHeartbeatState.IDLE
+        } ?: return
+        if (report.sequence <= 0L) return
+
+        val target = desired
+        val targetStillMatches = target?.file == slot.file
+        if (closing == null && targetStillMatches) return
+        beginStop(slot, unexpected = false)
     }
 
     private fun finishCloseIfIdle() {
@@ -484,6 +499,9 @@ internal class ScriptGuardianSupervisor(
         command.request.result.complete(status != null)
         status?.let { acceptedStatus ->
             runCatching { onStatus(acceptedStatus) }
+            if (acceptedStatus.heartbeat?.state == ScriptGuardianHeartbeatState.IDLE) {
+                active?.let(::stopActiveIfProvenIdle)
+            }
         }
     }
 
@@ -563,6 +581,7 @@ internal class ScriptGuardianSupervisor(
         firstHeartbeatJob = null
         if (!heartbeatRequired || heartbeatState != null) return
         val slot = active?.takeIf { it.id == slotId } ?: return
+        if (closing != null || desired?.file != slot.file) return
         beginStop(
             slot,
             unexpected = true,

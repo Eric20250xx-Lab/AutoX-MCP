@@ -78,7 +78,6 @@ class ScriptGuardianWatchdogService : Service() {
 
     override fun onCreate() {
         super.onCreate()
-        startForegroundIfNeeded()
         runCatching {
             registerReceiver(batteryReceiver, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
         }.onSuccess { sticky ->
@@ -90,12 +89,15 @@ class ScriptGuardianWatchdogService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        startForegroundIfNeeded()
         val nextConfig = intent?.readConfig()
-        if (nextConfig == null || !nextConfig.enabled) {
+        if (nextConfig == null || resolveRunnableGuardianScript(nextConfig).isFailure) {
+            config = null
+            probeJob?.cancel()
+            probeJob = null
             stopSelf()
             return START_NOT_STICKY
         }
+        startForegroundIfNeeded()
         config = nextConfig
         if (probeJob?.isActive != true) {
             startProbeLoop()
@@ -393,7 +395,7 @@ class ScriptGuardianWatchdogService : Service() {
         private val REQUEST_IDS = AtomicLong()
 
         internal fun applyConfig(context: Context, config: ScriptGuardianConfig) {
-            if (!config.enabled) {
+            if (resolveRunnableGuardianScript(config).isFailure) {
                 stop(context)
                 return
             }

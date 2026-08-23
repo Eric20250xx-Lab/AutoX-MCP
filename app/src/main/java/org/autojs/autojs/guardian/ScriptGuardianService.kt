@@ -30,12 +30,28 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import org.autojs.autoxjs.R
 import com.stardust.automator.AccessibilityGestureCoordinator
 import com.stardust.view.accessibility.AccessibilityService as AutoXAccessibilityService
+import java.io.File
+
+internal fun resolveRunnableGuardianScript(config: ScriptGuardianConfig): Result<File> =
+    config.resolveScriptFile().mapCatching { file ->
+        require(file.isFile) { "script file does not exist: ${file.path}" }
+        file
+    }
+
+internal fun shouldDispatchGuardianKeyguardGesture(
+    destroyed: Boolean,
+    recoveryActive: Boolean,
+    recoveryJobActive: Boolean,
+    guardianAllowsGesture: Boolean
+): Boolean = !destroyed && recoveryActive && recoveryJobActive && guardianAllowsGesture
 
 class ScriptGuardianService : Service() {
     private val serviceJob = SupervisorJob()
@@ -95,6 +111,8 @@ class ScriptGuardianService : Service() {
 
     @Volatile
     private var foregroundStarted = false
+    @Volatile
+    private var destroyed = false
     private var stopping = false
     private var configEnabled = false
     private var invalidConfigReason: String? = null
@@ -102,6 +120,7 @@ class ScriptGuardianService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        destroyed = false
         startForegroundIfNeeded(getString(R.string.script_guardian_status_waiting))
         diagnostics = ScriptGuardianDiagnostics(applicationContext)
         runner = EngineScriptGuardianRunner(applicationContext)
@@ -201,21 +220,23 @@ class ScriptGuardianService : Service() {
             ScriptGuardianRuntimeDiagnostics.recordRestore(intent.action)
         }
         processConfig = config
+        val runnableConfig = resolveRunnableGuardianScript(config).isSuccess
         if (stopping) {
-            if (config.enabled && config.resolveScriptFile().isSuccess) {
+            if (runnableConfig) {
                 pendingConfig = config
             } else {
                 pendingConfig = null
             }
-            return if (config.enabled) START_STICKY else START_NOT_STICKY
+            return if (runnableConfig) START_STICKY else START_NOT_STICKY
         }
         applyConfig(config)
-        return if (config.enabled) START_STICKY else START_NOT_STICKY
+        return if (runnableConfig) START_STICKY else START_NOT_STICKY
     }
 
     override fun onDestroy() {
-        mainHandler.removeCallbacksAndMessages(null)
+        destroyed = true
         cancelScreenRecovery()
+        mainHandler.removeCallbacksAndMessages(null)
         ScriptGuardianHeartbeat.unbind(heartbeatSink)
         ScriptGuardianHeartbeat.unbindExpectation(heartbeatExpectationSink)
         if (::wakeLockLease.isInitialized) {
@@ -257,7 +278,7 @@ class ScriptGuardianService : Service() {
             return
         }
 
-        config.resolveScriptFile().fold(
+        resolveRunnableGuardianScript(config).fold(
             onSuccess = { file ->
                 invalidConfigReason = null
                 screenWakeConfigValid = true
@@ -377,6 +398,7 @@ class ScriptGuardianService : Service() {
     }
 
     private fun scheduleScreenRecovery(reason: String, recoveryGeneration: Long) {
+        if (destroyed) return
         cancelScreenRecovery()
         screenRecoveryJob = serviceScope.launch {
             delay(SCREEN_RECOVERY_INITIAL_DELAY_MILLIS)
@@ -501,18 +523,19 @@ class ScriptGuardianService : Service() {
     }
 
     private suspend fun dispatchNonSecureKeyguardSwipe(recoveryGeneration: Long): Boolean {
-        val gestureLease = AccessibilityGestureCoordinator.acquire() ?: return false
+        val gestureLease = acquireKeyguardGestureLease(recoveryGeneration) ?: return false
         val result = CompletableDeferred<Boolean>()
-        val posted = mainHandler.post {
-            if (!screenWakePolicy.isRecoveryActive(recoveryGeneration)) {
+        val dispatch = Runnable {
+            if (!shouldDispatchGuardianKeyguardGesture(
+                    destroyed = destroyed,
+                    recoveryActive = screenWakePolicy.isRecoveryActive(recoveryGeneration),
+                    recoveryJobActive = screenRecoveryJob?.isActive == true,
+                    guardianAllowsGesture = supervisor.allowsBackgroundKeyguardGesture()
+                )
+            ) {
                 gestureLease.close()
                 result.complete(false)
-                return@post
-            }
-            if (!supervisor.allowsBackgroundKeyguardGesture()) {
-                gestureLease.close()
-                result.complete(false)
-                return@post
+                return@Runnable
             }
             val action = currentKeyguardAction()
             val accessibilityService = AutoXAccessibilityService.instance
@@ -522,7 +545,7 @@ class ScriptGuardianService : Service() {
             ) {
                 gestureLease.close()
                 result.complete(false)
-                return@post
+                return@Runnable
             }
 
             val metrics = resources.displayMetrics
@@ -567,17 +590,38 @@ class ScriptGuardianService : Service() {
                 result.complete(false)
             }
         }
-        if (!posted) {
-            gestureLease.close()
-            return false
-        }
         return try {
+            currentCoroutineContext().ensureActive()
+            if (!mainHandler.post(dispatch)) return false
             withTimeoutOrNull(KEYGUARD_GESTURE_TIMEOUT_MILLIS) {
                 result.await()
             } ?: false
         } finally {
+            mainHandler.removeCallbacks(dispatch)
             gestureLease.close()
         }
+    }
+
+    private suspend fun acquireKeyguardGestureLease(
+        recoveryGeneration: Long
+    ): AccessibilityGestureCoordinator.Lease? {
+        while (!destroyed && screenWakePolicy.isRecoveryActive(recoveryGeneration)) {
+            currentCoroutineContext().ensureActive()
+            AccessibilityGestureCoordinator.tryAcquire()?.let { lease ->
+                return if (
+                    !destroyed &&
+                    screenWakePolicy.isRecoveryActive(recoveryGeneration) &&
+                    screenRecoveryJob?.isActive == true
+                ) {
+                    lease
+                } else {
+                    lease.close()
+                    null
+                }
+            }
+            delay(KEYGUARD_GESTURE_LEASE_POLL_MILLIS)
+        }
+        return null
     }
 
     private fun cancelScreenRecovery() {
@@ -720,6 +764,7 @@ class ScriptGuardianService : Service() {
         private const val KEYGUARD_ACCESSIBILITY_WAIT_MILLIS = 15_000L
         private const val KEYGUARD_ACCESSIBILITY_POLL_MILLIS = 500L
         private const val KEYGUARD_GESTURE_TIMEOUT_MILLIS = 1_500L
+        private const val KEYGUARD_GESTURE_LEASE_POLL_MILLIS = 50L
         private const val KEYGUARD_RETRY_DELAY_MILLIS = 500L
         private const val KEYGUARD_STATE_TIMEOUT_MILLIS = 1_000L
         private const val KEYGUARD_SWIPE_DURATION_MILLIS = 350L

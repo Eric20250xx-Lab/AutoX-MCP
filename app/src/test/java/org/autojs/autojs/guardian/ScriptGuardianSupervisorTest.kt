@@ -7,6 +7,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.yield
 import org.junit.After
@@ -94,6 +95,8 @@ class ScriptGuardianSupervisorTest {
         supervisor.reconcile(A)
         val stopGate = CompletableDeferred<Boolean>()
         runner.stopGate = stopGate
+        val sessionId = runner.starts.single().sessionId
+        supervisor.reportHeartbeat(heartbeat(sessionId, 1L, ScriptGuardianHeartbeatState.IDLE))
 
         supervisor.reconcile(B)
         supervisor.reconcile(C)
@@ -111,6 +114,9 @@ class ScriptGuardianSupervisorTest {
     fun staleCallbackCannotStopReplacement() = runBlocking {
         supervisor.reconcile(A)
         val first = runner.starts.single()
+        supervisor.reportHeartbeat(
+            heartbeat(first.sessionId, 1L, ScriptGuardianHeartbeatState.IDLE)
+        )
         supervisor.reconcile(B)
         yield()
         assertEquals(listOf(A, B), runner.startedFiles)
@@ -125,6 +131,8 @@ class ScriptGuardianSupervisorTest {
     @Test
     fun stopTimeoutDoesNotStartReplacement() = runBlocking {
         supervisor.reconcile(A)
+        val sessionId = runner.starts.single().sessionId
+        supervisor.reportHeartbeat(heartbeat(sessionId, 1L, ScriptGuardianHeartbeatState.IDLE))
         runner.stopResults.add(false)
 
         supervisor.reconcile(B)
@@ -149,14 +157,82 @@ class ScriptGuardianSupervisorTest {
     }
 
     @Test
-    fun existingMatchingExecutionsAreStoppedBeforeManagedStart() = runBlocking {
+    fun existingMatchingExecutionsAreNeverStoppedWithoutKnownIdleState() = runBlocking {
         runner.existing[A.canonicalPath] = mutableListOf(FakeExecution(90), FakeExecution(91))
 
         supervisor.reconcile(A)
         yield()
 
-        assertEquals(2, runner.stopped.size)
+        assertTrue(runner.stopped.isEmpty())
+        assertTrue(runner.startedFiles.isEmpty())
+        assertTrue(waits.hasPending(5_000L))
+
+        waits.release(5_000L)
+        yield()
+
         assertEquals(listOf(A), runner.startedFiles)
+    }
+
+    @Test
+    fun unknownRunningStateDefersReconfigurationUntilExecutionEndsNaturally() = runBlocking {
+        supervisor.reconcile(A)
+        val first = runner.starts.single()
+
+        supervisor.reconcile(B)
+        yield()
+
+        assertTrue(runner.stopped.isEmpty())
+        assertEquals(listOf(A), runner.startedFiles)
+
+        first.onFinished(null)
+        yield()
+
+        assertTrue(runner.stopped.isEmpty())
+        assertEquals(listOf(A, B), runner.startedFiles)
+    }
+
+    @Test
+    fun pendingReconfigurationCannotTurnMissingFirstHeartbeatIntoForcedStop() = runBlocking {
+        supervisor.reconcile(A)
+        val first = runner.starts.single()
+        assertTrue(supervisor.expectHeartbeat(first.sessionId))
+
+        supervisor.reconcile(B)
+        yield()
+        assertTrue(waits.hasPending(ScriptGuardianSupervisor.FIRST_HEARTBEAT_TIMEOUT_MILLIS))
+        waits.release(ScriptGuardianSupervisor.FIRST_HEARTBEAT_TIMEOUT_MILLIS)
+        yield()
+
+        assertTrue(runner.stopped.isEmpty())
+        assertEquals(listOf(A), runner.startedFiles)
+
+        first.onFinished(null)
+        yield()
+
+        assertEquals(listOf(A, B), runner.startedFiles)
+    }
+
+    @Test
+    fun busyRunningStateDefersAndAppliesOnlyLatestGenerationWhenIdle() = runBlocking {
+        supervisor.reconcile(A)
+        val sessionId = runner.starts.single().sessionId
+        supervisor.reportHeartbeat(
+            heartbeat(sessionId, 1L, ScriptGuardianHeartbeatState.BUSY, "command-1")
+        )
+
+        supervisor.reconcile(B)
+        supervisor.reconcile(C)
+        yield()
+
+        assertTrue(runner.stopped.isEmpty())
+        assertEquals(listOf(A), runner.startedFiles)
+
+        supervisor.reportHeartbeat(heartbeat(sessionId, 2L, ScriptGuardianHeartbeatState.IDLE))
+        yield()
+
+        assertEquals(1, runner.stopped.size)
+        assertEquals(listOf(A, C), runner.startedFiles)
+        assertFalse(runner.startedFiles.contains(B))
     }
 
     @Test
@@ -250,6 +326,9 @@ class ScriptGuardianSupervisorTest {
         yield()
         val oldSessionId = runner.starts.single().sessionId
 
+        supervisor.reportHeartbeat(
+            heartbeat(oldSessionId, 1L, ScriptGuardianHeartbeatState.IDLE)
+        )
         supervisor.reconcile(B)
         yield()
         val currentSessionId = runner.starts.last().sessionId
@@ -257,7 +336,7 @@ class ScriptGuardianSupervisorTest {
         assertFalse(supervisor.expectHeartbeat(oldSessionId))
         assertFalse(
             supervisor.reportHeartbeat(
-                heartbeat(oldSessionId, 1L, ScriptGuardianHeartbeatState.IDLE)
+                heartbeat(oldSessionId, 2L, ScriptGuardianHeartbeatState.IDLE)
             )
         )
         assertTrue(supervisor.expectHeartbeat(currentSessionId))
@@ -554,12 +633,51 @@ class ScriptGuardianSupervisorTest {
     @Test
     fun closeStopsCurrentExecutionAndPreventsRestart() = runBlocking {
         supervisor.reconcile(A)
+        val sessionId = runner.starts.single().sessionId
+        supervisor.reportHeartbeat(heartbeat(sessionId, 1L, ScriptGuardianHeartbeatState.IDLE))
         supervisor.close()
 
         assertEquals(1, runner.stopped.size)
         runner.starts.single().onFinished(null)
         yield()
         assertFalse(waits.hasPending(5_000L))
+    }
+
+    @Test
+    fun closeDoesNotForceStopBusyExecution() = runBlocking {
+        supervisor.reconcile(A)
+        val first = runner.starts.single()
+        supervisor.reportHeartbeat(
+            heartbeat(first.sessionId, 1L, ScriptGuardianHeartbeatState.BUSY, "command-1")
+        )
+        val closed = CompletableDeferred<Unit>()
+        scope.launch {
+            supervisor.close()
+            closed.complete(Unit)
+        }
+        yield()
+
+        assertFalse(closed.isCompleted)
+        assertTrue(runner.stopped.isEmpty())
+
+        first.onFinished(null)
+        yield()
+
+        assertTrue(closed.isCompleted)
+        assertTrue(runner.stopped.isEmpty())
+    }
+
+    @Test
+    fun closeNowDoesNotForceStopBusyExecution() = runBlocking {
+        supervisor.reconcile(A)
+        val sessionId = runner.starts.single().sessionId
+        supervisor.reportHeartbeat(
+            heartbeat(sessionId, 1L, ScriptGuardianHeartbeatState.BUSY, "command-1")
+        )
+
+        supervisor.closeNow()
+
+        assertTrue(runner.stopped.isEmpty())
     }
 
     private fun heartbeat(

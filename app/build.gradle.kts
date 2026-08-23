@@ -119,6 +119,8 @@ android {
         }
         create("v7_mini") {
             applicationIdSuffix = ".v7"
+            versionCode = versions.devVersionCode
+            versionName = versions.devVersionName
             buildConfigField("String", "CHANNEL", "\"v7\"")
             manifestPlaceholders.putAll(mapOf("appName" to "Autox.js v7"))
         }

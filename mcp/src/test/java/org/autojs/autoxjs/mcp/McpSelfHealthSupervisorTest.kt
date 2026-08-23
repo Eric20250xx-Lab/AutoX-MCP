@@ -232,4 +232,128 @@ class McpSelfHealthSupervisorTest {
         assertTrue(currentRestarted)
         assertEquals(1, restartCount)
     }
+
+    @Test
+    fun staleConfigProbeCannotMutateReplacementOrConsumeRestartBudget() {
+        val supervisor = supervisor()
+        val configA = McpConfig(enabled = true, host = "127.0.0.1", port = 27190)
+        val configB = configA.copy(port = 27191)
+        supervisor.startSession()
+        var identity = supervisor.beginEngineStart()
+        supervisor.engineStartSucceeded(identity)
+        val staleTarget = McpSelfProbeTarget(configA, identity)
+        var staleRecordCalls = 0
+
+        repeat(8) {
+            assertNull(
+                recordProbeFailureIfCurrent(
+                    supervisor = supervisor,
+                    activeConfig = configB,
+                    currentIdentity = identity,
+                    probeTarget = staleTarget,
+                    recordFailure = { staleIdentity, errorCode ->
+                        staleRecordCalls += 1
+                        supervisor.recordProbeFailure(staleIdentity, errorCode)
+                    }
+                )
+            )
+        }
+
+        assertEquals(0, staleRecordCalls)
+        assertEquals(McpHealthState.HEALTHY, supervisor.snapshot().state)
+        assertEquals(0, supervisor.snapshot().consecutiveFailures)
+        assertNull(supervisor.snapshot().lastErrorCode)
+
+        repeat(3) {
+            val currentTarget = McpSelfProbeTarget(configB, identity)
+            assertEquals(
+                McpRecoveryAction.NONE,
+                recordProbeFailureIfCurrent(
+                    supervisor = supervisor,
+                    activeConfig = configB,
+                    currentIdentity = identity,
+                    probeTarget = currentTarget
+                )
+            )
+            assertEquals(
+                McpRecoveryAction.RESTART_ENGINE,
+                recordProbeFailureIfCurrent(
+                    supervisor = supervisor,
+                    activeConfig = configB,
+                    currentIdentity = identity,
+                    probeTarget = currentTarget
+                )
+            )
+            elapsed += 1_000L
+            wall += 1L
+            identity = supervisor.beginEngineStart()
+            supervisor.engineStartSucceeded(identity)
+        }
+
+        val rateLimitedTarget = McpSelfProbeTarget(configB, identity)
+        assertEquals(
+            McpRecoveryAction.NONE,
+            recordProbeFailureIfCurrent(
+                supervisor = supervisor,
+                activeConfig = configB,
+                currentIdentity = identity,
+                probeTarget = rateLimitedTarget
+            )
+        )
+        assertEquals(
+            McpRecoveryAction.RATE_LIMITED,
+            recordProbeFailureIfCurrent(
+                supervisor = supervisor,
+                activeConfig = configB,
+                currentIdentity = identity,
+                probeTarget = rateLimitedTarget
+            )
+        )
+    }
+
+    @Test
+    fun staleIdentityProbeIsRejectedBeforeSupervisorMutation() {
+        val supervisor = supervisor()
+        val config = McpConfig(enabled = true, host = "127.0.0.1", port = 27190)
+        supervisor.startSession()
+        val staleIdentity = supervisor.beginEngineStart()
+        supervisor.engineStartSucceeded(staleIdentity)
+        val replacementIdentity = supervisor.beginEngineStart()
+        supervisor.engineStartSucceeded(replacementIdentity)
+        var staleRecordCalls = 0
+
+        assertNull(
+            recordProbeFailureIfCurrent(
+                supervisor = supervisor,
+                activeConfig = config,
+                currentIdentity = replacementIdentity,
+                probeTarget = McpSelfProbeTarget(config, staleIdentity),
+                recordFailure = { identity, errorCode ->
+                    staleRecordCalls += 1
+                    supervisor.recordProbeFailure(identity, errorCode)
+                }
+            )
+        )
+
+        assertEquals(0, staleRecordCalls)
+        assertEquals(McpHealthState.HEALTHY, supervisor.snapshot().state)
+        assertEquals(0, supervisor.snapshot().consecutiveFailures)
+        assertNull(supervisor.snapshot().lastErrorCode)
+    }
+
+    private fun recordProbeFailureIfCurrent(
+        supervisor: McpSelfHealthSupervisor,
+        activeConfig: McpConfig?,
+        currentIdentity: McpEngineIdentity?,
+        probeTarget: McpSelfProbeTarget,
+        recordFailure: (McpEngineIdentity, String) -> McpRecoveryAction =
+            supervisor::recordProbeFailure
+    ): McpRecoveryAction? = recordMcpProbeResultIfCurrent(
+        activeConfig = activeConfig,
+        currentIdentity = currentIdentity,
+        probeTarget = probeTarget,
+        result = McpProbeResult.Failure(McpSelfHealthSupervisor.ERROR_PROBE_TIMEOUT),
+        recordSuccess = supervisor::recordProbeSuccess,
+        recordFailure = recordFailure
+    )
 }
