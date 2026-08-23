@@ -17,7 +17,7 @@
 - 简易鉴权：请求头 `X-Token` 对比 `McpConfig.token`（为空则不校验）。
 
 ## 运行/配置
-- 入口类：`org.autojs.autoxjs.mcp.McpService`（由 `McpServerService` 在 `:script` 进程中托管）
+- 入口类：`org.autojs.autoxjs.mcp.McpService`（由 `McpServerService` 在默认主进程中托管）
 - 配置结构：`McpConfig(enabled, host, port, token, allowBase64, allowNetwork)`
 - 设置页开关（推荐）：
   - 进入“设置 → MCP 服务”
@@ -45,6 +45,7 @@ mcpService.start(cfg)
 
 Script Guardian 用于保持一个用户指定的常驻脚本运行。它是 AutoX 自身的
 通用功能，不依赖 MCP 服务：关闭或重启 MCP 不会停止被守护的脚本。
+进程拓扑、真机故障证据和能力边界见 [Guardian 与 MCP 可靠性边界](GUARDIAN_RELIABILITY.md)。
 
 在“设置 → 脚本运行”中配置：
 
@@ -288,7 +289,7 @@ curl -X POST http://127.0.0.1:27190/mcp \
 - 服务默认监听 `0.0.0.0:27190`（允许局域网访问）；如需仅本机访问可改为 `127.0.0.1`，并务必设置 `token`。
 - 运行脚本使用 `EngineController` 调度，脚本执行完后会删除临时文件。
 - 占位工具返回 `NotImplemented`，可按 `DefaultTools.kt` 模式补齐，建议统一输入校验与超时控制。
-- 工具调用日志：Logcat 过滤 `McpToolCall`（服务运行在 `:script` 进程）。
+- 工具调用日志：Logcat 过滤 `McpToolCall`（服务运行在默认主进程）。
 - `get_recent_screenshot` 在无历史截图时会自动抓取一张。
 - Base64 截图默认会缩放到最长边 720px，并使用 JPEG 质量 70 以降低体积。
 - Android 11 及以上版本会把无障碍截图的硬件缓冲区复制为普通位图，并在 5 秒无回调时返回错误。若目标 App 使用安全窗口保护内容，Android 会拒绝截图；MCP 会返回明确错误，但不会绕过系统保护。
