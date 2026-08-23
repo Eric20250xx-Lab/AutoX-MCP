@@ -19,7 +19,6 @@ import com.google.mlkit.common.MlKit
 import com.stardust.app.GlobalAppContext
 import com.stardust.autojs.core.pref.PrefKey
 import com.stardust.autojs.servicecomponents.EngineController
-import com.stardust.autojs.util.ProcessUtils
 import com.stardust.theme.ThemeColor
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -28,6 +27,9 @@ import org.autojs.autojs.autojs.key.GlobalKeyObserver
 import org.autojs.autojs.external.receiver.DynamicBroadcastReceivers
 import org.autojs.autojs.guardian.ScriptGuardianExecutionGuard
 import org.autojs.autojs.guardian.ScriptGuardianPreferenceBridge
+import org.autojs.autojs.guardian.ScriptGuardianPrewarmScheduler
+import org.autojs.autojs.guardian.ScriptGuardianRuntimeDiagnostics
+import org.autojs.autojs.guardian.ScriptGuardianStartupRestorer
 import org.autojs.autojs.theme.ThemeColorManagerCompat
 import org.autojs.autojs.timing.TimedTaskManager
 import org.autojs.autojs.timing.TimedTaskScheduler
@@ -55,8 +57,20 @@ class App : Application(), Configuration.Provider {
             this, com.stardust.app.BuildConfig.generate(BuildConfig::class.java)
         )
         instance = WeakReference(this)
+        val processRole = AppProcessRole.resolve(
+            packageName = packageName,
+            processName = AppProcessRole.currentProcessName(this),
+            scriptProcessSuffix = getString(R.string.text_script_process_name)
+        )
+        if (processRole == AppProcessRole.WATCHDOG) {
+            Log.i(TAG, "Started lightweight Guardian watchdog process")
+            return
+        }
+        if (processRole == AppProcessRole.MAIN) {
+            ScriptGuardianRuntimeDiagnostics.initializeMainProcess()
+        }
         setUpDebugEnvironment()
-        init()
+        init(processRole)
     }
 
 
@@ -64,7 +78,7 @@ class App : Application(), Configuration.Provider {
         ErrorReportActivity.install(this, MainActivity::class.java)
     }
 
-    private fun init() {
+    private fun init(processRole: AppProcessRole) {
         initLanguage()
         ThemeColorManagerCompat.init(
             this,
@@ -74,7 +88,7 @@ class App : Application(), Configuration.Provider {
                 ContextCompat.getColor(this, R.color.colorAccent)
             )
         )
-        if (ProcessUtils.isScriptProcess(this)) {
+        if (processRole == AppProcessRole.SCRIPT) {
             AutoJs.initInstance(this)
             ScriptGuardianExecutionGuard.install(this)
             if (Pref.isRunningVolumeControlEnabled()) {
@@ -85,19 +99,29 @@ class App : Application(), Configuration.Provider {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
                 WebView.setDataDirectorySuffix(getString(R.string.text_script_process_name))
             };
-        } else if (ProcessUtils.isMainProcess(this)) {
+        } else if (processRole == AppProcessRole.MAIN) {
             initResource()
             AutoJs.initInstance(this)
             ScriptGuardianExecutionGuard.install(this)
             mcpPreferenceBridge = McpPreferenceBridge(this).apply { start() }
             scriptGuardianPreferenceBridge = ScriptGuardianPreferenceBridge(this).apply { start() }
+            runCatching {
+                ScriptGuardianStartupRestorer(this).restoreIfEnabled()
+            }.onFailure { error ->
+                Log.w(TAG, "Could not restore Script Guardian during main process start", error)
+            }
+            runCatching {
+                ScriptGuardianPrewarmScheduler.reconcile(this, "main_process_start")
+            }.onFailure { error ->
+                Log.w(TAG, "Could not schedule Script Guardian prewarm", error)
+            }
             EngineController.scope.launch {
                 delay(1000)
                 ShizukuProvider.requestBinderForNonProviderProcess(this@App)
             }
         }
         Log.i(
-            TAG, "Pid: ${Process.myPid()}, isScriptProcess: ${ProcessUtils.isScriptProcess(this)}"
+            TAG, "Pid: ${Process.myPid()}, processRole: $processRole"
         )
     }
 

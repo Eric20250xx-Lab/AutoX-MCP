@@ -192,6 +192,41 @@
                 android:value="Keeps one user-configured AutoX automation script running" />
         </service>
 
+        <service
+            android:name="org.autojs.autojs.guardian.ScriptGuardianProcessProbeService"
+            android:exported="false" />
+
+        <service
+            android:name="org.autojs.autojs.guardian.ScriptGuardianWatchdogService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse"
+            android:process=":guardian">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Checks and restores the user-enabled Script Guardian main process" />
+        </service>
+
+        <receiver
+            android:name="org.autojs.autojs.guardian.ScriptGuardianRestoreReceiver"
+            android:enabled="true"
+            android:exported="true"
+            tools:ignore="ExportedReceiver">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.QUICKBOOT_POWERON" />
+                <action android:name="android.intent.action.USER_UNLOCKED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+                <action android:name="android.intent.action.TIME_SET" />
+                <action android:name="android.intent.action.TIMEZONE_CHANGED" />
+                <action android:name="android.app.action.SCHEDULE_EXACT_ALARM_PERMISSION_STATE_CHANGED" />
+            </intent-filter>
+        </receiver>
+
+        <receiver
+            android:name="org.autojs.autojs.guardian.ScriptGuardianPrewarmReceiver"
+            android:enabled="true"
+            android:exported="false" />
+
         <activity-alias
             android:name=".external.tasker.PluginActivity"
             android:exported="true"
@@ -242,6 +277,7 @@
             <intent-filter>
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
                 <action android:name="android.intent.action.QUICKBOOT_POWERON" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
                 <action android:name="android.intent.action.TIME_SET" />
                 <action android:name="android.intent.action.TIMEZONE_CHANGED" />
                 <action android:name="android.intent.action.UID_REMOVED" />

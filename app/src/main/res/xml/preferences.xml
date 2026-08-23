@@ -65,6 +65,37 @@
             android:layout="@layout/preference_custom"
             android:summary="@string/summary_script_guardian_path"
             android:title="@string/text_script_guardian_path" />
+
+        <SwitchPreference
+            android:defaultValue="false"
+            android:dependency="@string/key_script_guardian_enabled"
+            android:key="@string/key_script_guardian_keep_screen_on_while_charging"
+            android:layout="@layout/preference_custom"
+            android:summary="@string/summary_script_guardian_keep_screen_on_while_charging"
+            android:title="@string/text_script_guardian_keep_screen_on_while_charging" />
+
+        <SwitchPreference
+            android:defaultValue="false"
+            android:dependency="@string/key_script_guardian_enabled"
+            android:key="@string/key_script_guardian_prewarm_enabled"
+            android:layout="@layout/preference_custom"
+            android:summary="@string/summary_script_guardian_prewarm_disabled"
+            android:title="@string/text_script_guardian_prewarm_enable" />
+
+        <EditTextPreference
+            android:defaultValue="08:15,17:45"
+            android:dependency="@string/key_script_guardian_prewarm_enabled"
+            android:inputType="text"
+            android:key="@string/key_script_guardian_prewarm_times"
+            android:layout="@layout/preference_custom"
+            android:summary="@string/summary_script_guardian_prewarm_times"
+            android:title="@string/text_script_guardian_prewarm_times" />
+
+        <Preference
+            android:key="@string/key_script_guardian_background_status"
+            android:layout="@layout/preference_custom"
+            android:summary="@string/summary_script_guardian_background_status_waiting"
+            android:title="@string/text_script_guardian_background_status" />
     </PreferenceCategory>
 
     <PreferenceCategory

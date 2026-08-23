@@ -17,7 +17,7 @@
 - 简易鉴权：请求头 `X-Token` 对比 `McpConfig.token`（为空则不校验）。
 
 ## 运行/配置
-- 入口类：`org.autojs.autoxjs.mcp.McpService`（由前台 `McpServerService` 托管；该 Service 未声明独立 `android:process`，因此运行在应用主进程）
+- 入口类：`org.autojs.autoxjs.mcp.McpService`（由 `McpServerService` 在默认主进程中托管）
 - 配置结构：`McpConfig(enabled, host, port, token, allowBase64, allowNetwork)`
 - 设置页开关（推荐）：
   - 进入“设置 → MCP 服务”
@@ -45,6 +45,7 @@ mcpService.start(cfg)
 
 Script Guardian 用于保持一个用户指定的常驻脚本运行。它是 AutoX 自身的
 通用功能，不依赖 MCP 服务：关闭或重启 MCP 不会停止被守护的脚本。
+进程拓扑、真机故障证据和能力边界见 [Guardian 与 MCP 可靠性边界](GUARDIAN_RELIABILITY.md)。
 
 在“设置 → 脚本运行”中配置：
 
@@ -63,8 +64,6 @@ Script Guardian 用于保持一个用户指定的常驻脚本运行。它是 Aut
 `QUICKBOOT_POWERON` 时尝试恢复 Guardian。部分 OEM 系统需要先允许 AutoX/Hamibot
 自动启动，并且不能将其电池策略设为 Restricted（受限）。实际恢复结果仍需在
 目标机型上完成真机冷启动验收。
-
-> 截至 2026-08-18，`7.2.1-eric.7` 已在 realme `RMX3366` 完成覆盖安装和基础运行检查：MCP 27 个工具、设备身份、UI 树、命令接收器 1.3.0、无障碍就绪和无业务副作用的连接测试均通过。尚未验证整机重启并首次解锁后不手动打开 AutoX 的自动恢复，以及恢复期间始终只有一个命令接收器实例；真实业务命令留到下一次正常使用时验收。
 
 Android 系统设置中的“强制停止”（force-stop）会禁止应用自行启动，因此 Guardian 无法自动恢复；
 需要用户再次手动打开 AutoX。对于接收命令的脚本，Guardian 恢复的只是接收器进程，
@@ -290,7 +289,7 @@ curl -X POST http://127.0.0.1:27190/mcp \
 - 服务默认监听 `0.0.0.0:27190`（允许局域网访问）；如需仅本机访问可改为 `127.0.0.1`，并务必设置 `token`。
 - 运行脚本使用 `EngineController` 调度，脚本执行完后会删除临时文件。
 - 占位工具返回 `NotImplemented`，可按 `DefaultTools.kt` 模式补齐，建议统一输入校验与超时控制。
-- 工具调用日志：Logcat 过滤 `McpToolCall`（服务运行在 `:script` 进程）。
+- 工具调用日志：Logcat 过滤 `McpToolCall`（服务运行在默认主进程）。
 - `get_recent_screenshot` 在无历史截图时会自动抓取一张。
 - Base64 截图默认会缩放到最长边 720px，并使用 JPEG 质量 70 以降低体积。
 - Android 11 及以上版本会把无障碍截图的硬件缓冲区复制为普通位图，并在 5 秒无回调时返回错误。若目标 App 使用安全窗口保护内容，Android 会拒绝截图；MCP 会返回明确错误，但不会绕过系统保护。

@@ -16,6 +16,10 @@
     <string name="key_guard_mode" translatable="false">key_guard_mode</string>
     <string name="key_script_guardian_enabled" translatable="false">key_script_guardian_enabled</string>
     <string name="key_script_guardian_path" translatable="false">key_script_guardian_path</string>
+    <string name="key_script_guardian_keep_screen_on_while_charging" translatable="false">key_script_guardian_keep_screen_on_while_charging</string>
+    <string name="key_script_guardian_prewarm_enabled" translatable="false">key_script_guardian_prewarm_enabled</string>
+    <string name="key_script_guardian_prewarm_times" translatable="false">key_script_guardian_prewarm_times</string>
+    <string name="key_script_guardian_background_status" translatable="false">key_script_guardian_background_status</string>
     <string name="key_intent_run_script" translatable="false" >key_intent_run_script</string>
     <string name="key_init_resource" translatable="false" >key_init_resource</string>
 

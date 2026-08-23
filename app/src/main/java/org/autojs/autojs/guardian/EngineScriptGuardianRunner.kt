@@ -2,6 +2,7 @@ package org.autojs.autojs.guardian
 
 import android.content.Context
 import com.stardust.autojs.execution.ScriptExecution
+import com.stardust.autojs.execution.ExecutionConfig
 import com.stardust.autojs.script.sourceFileOrNull
 import com.stardust.autojs.servicecomponents.BinderScriptListener
 import com.stardust.autojs.servicecomponents.EngineController
@@ -60,6 +61,7 @@ internal class EngineScriptGuardianRunner(
 
     override fun start(
         file: File,
+        sessionId: String,
         onStarted: () -> Unit,
         onFinished: (Throwable?) -> Unit
     ): ScriptGuardianExecution {
@@ -73,7 +75,13 @@ internal class EngineScriptGuardianRunner(
         }
         return LocalExecutionHandle(
             ScriptGuardianExecutionGuard.runManagedLaunch {
-                EngineController.runScriptLocalTracked(file, listener)
+                EngineController.runScriptLocalTracked(
+                    file,
+                    listener,
+                    ExecutionConfig(workingDirectory = file.parent ?: "/").apply {
+                        setArgument(ScriptGuardianHeartbeat.SESSION_ARGUMENT, sessionId)
+                    }
+                )
             }
         )
     }

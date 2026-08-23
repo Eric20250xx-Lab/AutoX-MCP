@@ -33,6 +33,10 @@ internal class ScriptGuardianPreferenceBridge(private val application: Applicati
     Application.ActivityLifecycleCallbacks {
     private val prefs = PreferenceManager.getDefaultSharedPreferences(application)
     private val watchedKeys = ScriptGuardianPrefs.watchedKeys(application)
+    private val prewarmKeys = setOf(
+        ScriptGuardianPrewarmPrefs.KEY_ENABLED,
+        ScriptGuardianPrewarmPrefs.KEY_TIMES
+    )
     private val resumedActivities = ConcurrentHashMap.newKeySet<Activity>()
     private val state = ScriptGuardianPreferenceState(
         prefs.getBoolean(ScriptGuardianPrefs.KEY_ENABLED, false)
@@ -55,11 +59,15 @@ internal class ScriptGuardianPreferenceBridge(private val application: Applicati
                 applyState(config)
             }
         }
+        if (key in watchedKeys || key in prewarmKeys) {
+            ScriptGuardianPrewarmScheduler.reconcile(application, "preference:$key")
+        }
     }
 
     override fun onActivityResumed(activity: Activity) {
         resumedActivities.add(activity)
         applyState(ScriptGuardianPrefs.load(application))
+        ScriptGuardianPrewarmScheduler.reconcile(application, "activity_resumed")
     }
 
     override fun onActivityPaused(activity: Activity) {

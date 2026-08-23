@@ -8,15 +8,17 @@ import android.os.Handler
 import android.os.Looper
 import android.view.ViewConfiguration
 import androidx.annotation.RequiresApi
-import com.stardust.concurrent.VolatileBox
-import com.stardust.concurrent.VolatileDispose
 import com.stardust.util.ScreenMetrics
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 
 /**
  * Created by Stardust on 2017/5/16.
  */
 
 class GlobalActionAutomator(private val mHandler: Handler?, private val serviceProvider: () -> AccessibilityService) {
+
+    private val gestureOwner = AccessibilityGestureCoordinator.Owner()
 
     private val service: AccessibilityService
         get() = serviceProvider()
@@ -197,43 +199,42 @@ class GlobalActionAutomator(private val mHandler: Handler?, private val serviceP
         }
         val handler = mHandler
         return if (handler == null) {
-            gesturesWithoutHandler(builder.build())
+            gesturesSynchronously(null, builder.build())
         } else {
-            gesturesWithHandler(handler, builder.build())
+            gesturesSynchronously(handler, builder.build())
         }
     }
 
-    private fun gesturesWithHandler(handler: Handler, description: GestureDescription): Boolean {
-        val result = VolatileDispose<Boolean>()
-        service.dispatchGesture(description, object : AccessibilityService.GestureResultCallback() {
-            override fun onCompleted(gestureDescription: GestureDescription) {
-                result.setAndNotify(true)
-            }
-
-            override fun onCancelled(gestureDescription: GestureDescription) {
-                result.setAndNotify(false)
-            }
-        }, handler)
-        return result.blockedGet()
-    }
-
-    private fun gesturesWithoutHandler(description: GestureDescription): Boolean {
-        prepareLooperIfNeeded()
-        val result = VolatileBox(false)
-        val handler = Looper.myLooper()?.let { Handler(it) }
-        service.dispatchGesture(description, object : AccessibilityService.GestureResultCallback() {
-            override fun onCompleted(gestureDescription: GestureDescription) {
-                result.set(true)
-                quitLoop()
-            }
-
-            override fun onCancelled(gestureDescription: GestureDescription) {
-                result.set(false)
-                quitLoop()
-            }
-        }, handler)
-        Looper.loop()
-        return result.get()
+    private fun gesturesSynchronously(
+        callbackHandler: Handler?,
+        description: GestureDescription
+    ): Boolean {
+        val ownerToken = gestureOwner.capture() ?: return false
+        val lease = acquireGestureLease() ?: return false
+        val deadlineNanos = gestureDeadlineNanos(description)
+        val completion = AccessibilityGestureCoordinator.completion(lease, deadlineNanos)
+        if (!gestureOwner.isActive(ownerToken)) {
+            completion.complete(false)
+            return false
+        }
+        var acceptedByService = false
+        val accepted = runCatching {
+            gestureOwner.runIfActive(ownerToken) {
+                acceptedByService = service.dispatchGesture(
+                    description,
+                    completionCallback(completion),
+                    callbackHandler
+                )
+            } && acceptedByService
+        }.getOrElse {
+            completion.complete(false)
+            throw it
+        }
+        if (!accepted) {
+            completion.complete(false)
+            return false
+        }
+        return completion.await()
     }
 
     fun gesturesAsync(vararg strokes: GestureDescription.StrokeDescription) {
@@ -241,18 +242,89 @@ class GlobalActionAutomator(private val mHandler: Handler?, private val serviceP
         for (stroke in strokes) {
             builder.addStroke(stroke)
         }
-        service.dispatchGesture(builder.build(), null, null)
-    }
-
-    private fun quitLoop() {
-        val looper = Looper.myLooper()
-        looper?.quit()
-    }
-
-    private fun prepareLooperIfNeeded() {
-        if (Looper.myLooper() == null) {
-            Looper.prepare()
+        val description = builder.build()
+        val ownerToken = gestureOwner.capture() ?: return
+        GESTURE_EXECUTOR.execute {
+            val lease = AccessibilityGestureCoordinator.acquire() ?: return@execute
+            if (!gestureOwner.isActive(ownerToken)) {
+                lease.close()
+                return@execute
+            }
+            val posted = MAIN_HANDLER.post {
+                if (!gestureOwner.isActive(ownerToken)) {
+                    lease.close()
+                    return@post
+                }
+                val completion = AccessibilityGestureCoordinator.completion(
+                    lease,
+                    gestureDeadlineNanos(description)
+                )
+                scheduleCompletionTimeout(completion, description)
+                var acceptedByService = false
+                val accepted = runCatching {
+                    gestureOwner.runIfActive(ownerToken) {
+                        acceptedByService = service.dispatchGesture(
+                            description,
+                            completionCallback(completion),
+                            MAIN_HANDLER
+                        )
+                    } && acceptedByService
+                }.getOrElse {
+                    completion.complete(false)
+                    false
+                }
+                if (!accepted) completion.complete(false)
+            }
+            if (!posted) lease.close()
         }
+    }
+
+    fun close() {
+        gestureOwner.close()
+    }
+
+    private fun acquireGestureLease(): AccessibilityGestureCoordinator.Lease? =
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            AccessibilityGestureCoordinator.tryAcquire()
+        } else {
+            AccessibilityGestureCoordinator.acquire()
+        }
+
+    private fun completionCallback(
+        completion: AccessibilityGestureCoordinator.Completion
+    ) = object : AccessibilityService.GestureResultCallback() {
+        override fun onCompleted(gestureDescription: GestureDescription) {
+            completion.complete(true)
+        }
+
+        override fun onCancelled(gestureDescription: GestureDescription) {
+            completion.complete(false)
+        }
+    }
+
+    private fun scheduleCompletionTimeout(
+        completion: AccessibilityGestureCoordinator.Completion,
+        description: GestureDescription
+    ) {
+        MAIN_HANDLER.postDelayed(
+            { completion.complete(false) },
+            gestureTimeoutMillis(description)
+        )
+    }
+
+    private fun gestureDeadlineNanos(description: GestureDescription): Long {
+        val timeoutNanos = TimeUnit.MILLISECONDS.toNanos(gestureTimeoutMillis(description))
+        val now = System.nanoTime()
+        return if (Long.MAX_VALUE - now < timeoutNanos) Long.MAX_VALUE else now + timeoutNanos
+    }
+
+    private fun gestureTimeoutMillis(description: GestureDescription): Long {
+        var latestStrokeEndMillis = 0L
+        for (index in 0 until description.strokeCount) {
+            val stroke = description.getStroke(index)
+            latestStrokeEndMillis = maxOf(latestStrokeEndMillis, stroke.startTime + stroke.duration)
+        }
+        return latestStrokeEndMillis + GESTURE_LEASE_TIMEOUT_MARGIN_MILLIS
     }
 
     fun click(x: Int, y: Int): Boolean {
@@ -277,6 +349,14 @@ class GlobalActionAutomator(private val mHandler: Handler?, private val serviceP
 
     fun swipe(x1: Int, y1: Int, x2: Int, y2: Int, delay: Long): Boolean {
         return gesture(0, delay, intArrayOf(x1, y1), intArrayOf(x2, y2))
+    }
+
+    companion object {
+        private val MAIN_HANDLER = Handler(Looper.getMainLooper())
+        private val GESTURE_EXECUTOR = Executors.newSingleThreadExecutor { runnable ->
+            Thread(runnable, "AutoX-GestureQueue").apply { isDaemon = true }
+        }
+        private const val GESTURE_LEASE_TIMEOUT_MARGIN_MILLIS = 2_000L
     }
 
 }
