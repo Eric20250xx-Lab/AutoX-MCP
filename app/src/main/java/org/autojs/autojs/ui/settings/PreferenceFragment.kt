@@ -13,6 +13,7 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.os.PowerManager
+import android.os.SystemClock
 import android.provider.Settings
 import android.text.format.DateUtils
 import android.widget.Toast
@@ -23,6 +24,8 @@ import androidx.preference.PreferenceManager
 import androidx.preference.SwitchPreference
 import com.stardust.pio.PFiles
 import de.psdev.licensesdialog.LicensesDialog
+import org.autojs.autojs.attendance.AttendanceAlarmScheduler
+import org.autojs.autojs.attendance.AttendanceAlarmSnapshot
 import org.autojs.autojs.external.open.RunIntentActivity
 import org.autojs.autojs.guardian.ScriptGuardianDiagnosticSnapshot
 import org.autojs.autojs.guardian.ScriptGuardianDiagnostics
@@ -32,6 +35,7 @@ import org.autojs.autojs.guardian.ScriptGuardianPrewarmSnapshot
 import org.autojs.autojs.guardian.ScriptGuardianPrefs
 import org.autojs.autojs.guardian.parseScriptGuardianPrewarmTimes
 import org.autojs.autojs.ui.widget.CommonMarkdownView
+import org.autojs.autoxjs.BuildConfig
 import org.autojs.autoxjs.R
 import java.time.Instant
 import java.time.ZoneId
@@ -45,6 +49,7 @@ class PreferenceFragment : PreferenceFragmentCompat() {
             if (!isResumed) return
             updateScriptGuardianBackgroundStatus()
             updateScriptGuardianPrewarmStatus()
+            updateAttendanceAlarmTestStatus()
             statusRefreshHandler.postDelayed(this, STATUS_REFRESH_INTERVAL_MILLIS)
         }
     }
@@ -70,6 +75,9 @@ class PreferenceFragment : PreferenceFragmentCompat() {
     override fun onCreatePreferences(savedInstanceState: Bundle?, rootKey: String?) {
         addPreferencesFromResource(R.xml.preferences)
         configureScriptGuardianPrewarmTimes()
+        findPreference<Preference>(
+            getString(R.string.key_attendance_alarm_delivery_test)
+        )?.isVisible = BuildConfig.DEBUG
     }
 
     override fun onResume() {
@@ -115,6 +123,14 @@ class PreferenceFragment : PreferenceFragmentCompat() {
             !ScriptGuardianPrewarmScheduler.canScheduleExactAlarms(activity)
         ) {
             openScriptGuardianExactAlarmSettings(activity)
+            return true
+        }
+        if (preference.key == getString(R.string.key_attendance_alarm_delivery_test)) {
+            val snapshot = AttendanceAlarmScheduler.scheduleDeliveryTest(activity)
+            updateAttendanceAlarmTestStatus(snapshot)
+            if (snapshot.state == AttendanceAlarmSnapshot.STATE_PERMISSION_REQUIRED) {
+                openScriptGuardianExactAlarmSettings(activity)
+            }
             return true
         }
         if (preference.title == getString(R.string.text_intent_run_script)) {
@@ -280,6 +296,83 @@ class PreferenceFragment : PreferenceFragmentCompat() {
         }
     }
 
+    private fun updateAttendanceAlarmTestStatus(
+        snapshot: AttendanceAlarmSnapshot = AttendanceAlarmScheduler.snapshot(requireContext())
+    ) {
+        val preference = findPreference<Preference>(
+            getString(R.string.key_attendance_alarm_delivery_test)
+        ) ?: return
+        preference.summary = when (snapshot.state) {
+            AttendanceAlarmSnapshot.STATE_PERMISSION_REQUIRED -> getString(
+                R.string.summary_attendance_alarm_test_permission_required
+            )
+
+            AttendanceAlarmSnapshot.STATE_SCHEDULED -> if (
+                (
+                    snapshot.plannedElapsedRealtimeMillis > 0L &&
+                    SystemClock.elapsedRealtime() > snapshot.plannedElapsedRealtimeMillis
+                ) || (
+                    snapshot.plannedAtMillis > 0L &&
+                    System.currentTimeMillis() > snapshot.plannedAtMillis
+                )
+            ) {
+                getString(
+                    R.string.summary_attendance_alarm_test_overdue,
+                    formatAttendanceAlarmTestTime(snapshot.plannedAtMillis)
+                )
+            } else {
+                getString(
+                    R.string.summary_attendance_alarm_test_scheduled,
+                    formatAttendanceAlarmTestTime(snapshot.plannedAtMillis)
+                )
+            }
+
+            AttendanceAlarmSnapshot.STATE_RECEIVED -> getString(
+                R.string.summary_attendance_alarm_test_received,
+                formatAttendanceAlarmTestTime(snapshot.receivedAtMillis),
+                formatAttendanceAlarmTestDelay(snapshot.delayMillis)
+            )
+
+            AttendanceAlarmSnapshot.STATE_SERVICE_STARTED -> getString(
+                R.string.summary_attendance_alarm_test_service_started,
+                formatAttendanceAlarmTestTime(snapshot.receivedAtMillis),
+                formatAttendanceAlarmTestDelay(snapshot.delayMillis)
+            )
+
+            AttendanceAlarmSnapshot.STATE_FINISHED -> getString(
+                R.string.summary_attendance_alarm_test_finished,
+                formatAttendanceAlarmTestTime(snapshot.receivedAtMillis),
+                formatAttendanceAlarmTestDelay(snapshot.delayMillis)
+            )
+
+            AttendanceAlarmSnapshot.STATE_SERVICE_START_FAILED -> getString(
+                R.string.summary_attendance_alarm_test_service_start_failed,
+                formatAttendanceAlarmTestTime(snapshot.receivedAtMillis),
+                formatAttendanceAlarmTestDelay(snapshot.delayMillis)
+            )
+
+            AttendanceAlarmSnapshot.STATE_ERROR -> getString(
+                R.string.summary_attendance_alarm_test_error
+            )
+
+            else -> getString(R.string.summary_attendance_alarm_test_idle)
+        }
+    }
+
+    private fun formatAttendanceAlarmTestTime(timestamp: Long): String =
+        Instant.ofEpochMilli(timestamp)
+            .atZone(SCRIPT_GUARDIAN_PREWARM_ZONE)
+            .format(ATTENDANCE_ALARM_TEST_FORMATTER)
+
+    private fun formatAttendanceAlarmTestDelay(delayMillis: Long): String = getString(
+        if (delayMillis >= 0L) {
+            R.string.attendance_alarm_test_delay_late
+        } else {
+            R.string.attendance_alarm_test_delay_early
+        },
+        kotlin.math.abs(delayMillis) / 1_000.0
+    )
+
     private fun formatScriptGuardianPrewarmTime(timestamp: Long): String =
         Instant.ofEpochMilli(timestamp)
             .atZone(SCRIPT_GUARDIAN_PREWARM_ZONE)
@@ -343,6 +436,8 @@ class PreferenceFragment : PreferenceFragmentCompat() {
         private val SCRIPT_GUARDIAN_PREWARM_ZONE = ZoneId.of("Asia/Shanghai")
         private val SCRIPT_GUARDIAN_PREWARM_FORMATTER =
             DateTimeFormatter.ofPattern("MM-dd HH:mm")
+        private val ATTENDANCE_ALARM_TEST_FORMATTER =
+            DateTimeFormatter.ofPattern("MM-dd HH:mm:ss")
 
         private fun showLicenseDialog(context: Context) {
             LicensesDialog.Builder(context)

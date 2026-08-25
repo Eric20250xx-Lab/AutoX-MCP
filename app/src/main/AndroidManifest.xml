@@ -227,6 +227,18 @@
             android:enabled="true"
             android:exported="false" />
 
+        <service
+            android:name="org.autojs.autojs.attendance.AttendanceAlarmTestService"
+            android:exported="false"
+            android:foregroundServiceType="shortService"
+            android:process=":attendance_probe" />
+
+        <receiver
+            android:name="org.autojs.autojs.attendance.AttendanceAlarmReceiver"
+            android:enabled="true"
+            android:exported="false"
+            android:process=":attendance_probe" />
+
         <activity-alias
             android:name=".external.tasker.PluginActivity"
             android:exported="true"

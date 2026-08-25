@@ -20,6 +20,7 @@
     <string name="key_script_guardian_prewarm_enabled" translatable="false">key_script_guardian_prewarm_enabled</string>
     <string name="key_script_guardian_prewarm_times" translatable="false">key_script_guardian_prewarm_times</string>
     <string name="key_script_guardian_background_status" translatable="false">key_script_guardian_background_status</string>
+    <string name="key_attendance_alarm_delivery_test" translatable="false">key_attendance_alarm_delivery_test</string>
     <string name="key_intent_run_script" translatable="false" >key_intent_run_script</string>
     <string name="key_init_resource" translatable="false" >key_init_resource</string>
 

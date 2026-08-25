@@ -180,6 +180,22 @@
   <string name="script_guardian_watchdog_suspect">Main process did not respond; checking again</string>
   <string name="script_guardian_watchdog_restoring">Requesting main-process recovery</string>
   <string name="script_guardian_watchdog_unresponsive">Main process still did not respond; recovery requested again</string>
+  <string name="text_attendance_alarm_delivery_test">Test one Exact Alarm delivery</string>
+  <string name="summary_attendance_alarm_test_idle">Tap to schedule a one-time test for about 2 minutes later. It only tests system delivery and never performs attendance</string>
+  <string name="summary_attendance_alarm_test_permission_required">Alarms &amp; reminders access is required. Grant it, then tap again; this test never performs attendance</string>
+  <string name="summary_attendance_alarm_test_scheduled">Scheduled for %1$s; this only tests system delivery and never performs attendance</string>
+  <string name="summary_attendance_alarm_test_overdue">The planned time %1$s has passed, but no Alarm delivery was recorded. No attendance action ran</string>
+  <string name="summary_attendance_alarm_test_received">Delivered at %1$s (%2$s), but no short-service start was recorded. No attendance action ran</string>
+  <string name="summary_attendance_alarm_test_service_started">Delivered at %1$s (%2$s); the short test service started. No attendance action will run</string>
+  <string name="summary_attendance_alarm_test_finished">Delivered at %1$s (%2$s); the short test service exited. No attendance action ran</string>
+  <string name="summary_attendance_alarm_test_service_start_failed">Delivered at %1$s (%2$s), but the short test service could not start. No attendance action ran</string>
+  <string name="summary_attendance_alarm_test_error">Could not schedule the test. No attendance action ran; check system settings and try again</string>
+  <string name="attendance_alarm_test_delay_late">%1$.1f seconds late</string>
+  <string name="attendance_alarm_test_delay_early">%1$.1f seconds early</string>
+  <string name="attendance_alarm_test_channel_name">Exact Alarm delivery test</string>
+  <string name="attendance_alarm_test_channel_description">Shows a one-time system alarm delivery test requested by the user</string>
+  <string name="attendance_alarm_test_notification_title">Exact Alarm delivery test</string>
+  <string name="attendance_alarm_test_notification_text">The system test arrived; no attendance action will run</string>
   <string name="text_layout_inspector_is_dumping">Layout analysis in progress</string>
   <string name="text_force_stop">Forced stop</string>
   <string name="text_execution_finished" formatted="false">\n ------------ \n [ %s ] Finished running in %f seconds</string>

@@ -66,6 +66,10 @@ class App : Application(), Configuration.Provider {
             Log.i(TAG, "Started lightweight Guardian watchdog process")
             return
         }
+        if (processRole == AppProcessRole.ATTENDANCE_PROBE) {
+            Log.i(TAG, "Started isolated Attendance Alarm test process")
+            return
+        }
         if (processRole == AppProcessRole.MAIN) {
             ScriptGuardianRuntimeDiagnostics.initializeMainProcess()
         }

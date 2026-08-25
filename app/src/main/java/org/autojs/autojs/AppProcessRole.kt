@@ -9,10 +9,12 @@ internal enum class AppProcessRole {
     MAIN,
     SCRIPT,
     WATCHDOG,
+    ATTENDANCE_PROBE,
     OTHER;
 
     companion object {
         private const val WATCHDOG_PROCESS_SUFFIX = ":guardian"
+        private const val ATTENDANCE_PROBE_PROCESS_SUFFIX = ":attendance_probe"
 
         fun resolve(
             packageName: String,
@@ -22,6 +24,7 @@ internal enum class AppProcessRole {
             packageName -> MAIN
             packageName + scriptProcessSuffix -> SCRIPT
             packageName + WATCHDOG_PROCESS_SUFFIX -> WATCHDOG
+            packageName + ATTENDANCE_PROBE_PROCESS_SUFFIX -> ATTENDANCE_PROBE
             else -> OTHER
         }
 
