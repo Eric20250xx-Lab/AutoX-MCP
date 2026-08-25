@@ -336,13 +336,16 @@ class PreferenceFragment : PreferenceFragmentCompat() {
             AttendanceAlarmSnapshot.STATE_SERVICE_STARTED -> getString(
                 R.string.summary_attendance_alarm_test_service_started,
                 formatAttendanceAlarmTestTime(snapshot.receivedAtMillis),
-                formatAttendanceAlarmTestDelay(snapshot.delayMillis)
+                formatAttendanceAlarmTestDelay(snapshot.delayMillis),
+                formatAttendanceAlarmTestTime(snapshot.serviceStartedAtMillis)
             )
 
             AttendanceAlarmSnapshot.STATE_FINISHED -> getString(
                 R.string.summary_attendance_alarm_test_finished,
                 formatAttendanceAlarmTestTime(snapshot.receivedAtMillis),
-                formatAttendanceAlarmTestDelay(snapshot.delayMillis)
+                formatAttendanceAlarmTestDelay(snapshot.delayMillis),
+                formatAttendanceAlarmTestTime(snapshot.serviceStartedAtMillis),
+                formatAttendanceAlarmTestTime(snapshot.serviceFinishedAtMillis)
             )
 
             AttendanceAlarmSnapshot.STATE_SERVICE_START_FAILED -> getString(

@@ -186,8 +186,8 @@
   <string name="summary_attendance_alarm_test_scheduled">Scheduled for %1$s; this only tests system delivery and never performs attendance</string>
   <string name="summary_attendance_alarm_test_overdue">The planned time %1$s has passed, but no Alarm delivery was recorded. No attendance action ran</string>
   <string name="summary_attendance_alarm_test_received">Delivered at %1$s (%2$s), but no short-service start was recorded. No attendance action ran</string>
-  <string name="summary_attendance_alarm_test_service_started">Delivered at %1$s (%2$s); the short test service started. No attendance action will run</string>
-  <string name="summary_attendance_alarm_test_finished">Delivered at %1$s (%2$s); the short test service exited. No attendance action ran</string>
+  <string name="summary_attendance_alarm_test_service_started">Delivered at %1$s (%2$s); the short test service started at %3$s. No attendance action will run</string>
+  <string name="summary_attendance_alarm_test_finished">Delivered at %1$s (%2$s); the short test service started at %3$s and exited at %4$s. No attendance action ran</string>
   <string name="summary_attendance_alarm_test_service_start_failed">Delivered at %1$s (%2$s), but the short test service could not start. No attendance action ran</string>
   <string name="summary_attendance_alarm_test_error">Could not schedule the test. No attendance action ran; check system settings and try again</string>
   <string name="attendance_alarm_test_delay_late">%1$.1f seconds late</string>

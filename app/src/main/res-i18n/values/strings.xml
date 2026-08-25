@@ -221,8 +221,8 @@
     <string name="summary_attendance_alarm_test_scheduled">已安排在 %1$s；仅测试系统投递，不会执行打卡</string>
     <string name="summary_attendance_alarm_test_overdue">计划时间 %1$s 已过，但尚未记录到 Alarm 投递；未执行打卡</string>
     <string name="summary_attendance_alarm_test_received">系统于 %1$s 投递（%2$s），但尚未记录到短测试服务启动；未执行打卡</string>
-    <string name="summary_attendance_alarm_test_service_started">系统于 %1$s 投递（%2$s），短测试服务已启动；不会执行打卡</string>
-    <string name="summary_attendance_alarm_test_finished">系统于 %1$s 投递（%2$s），短测试服务已退出；未执行打卡</string>
+    <string name="summary_attendance_alarm_test_service_started">系统于 %1$s 投递（%2$s），短测试服务于 %3$s 启动；不会执行打卡</string>
+    <string name="summary_attendance_alarm_test_finished">系统于 %1$s 投递（%2$s），短测试服务于 %3$s 启动，并于 %4$s 退出；未执行打卡</string>
     <string name="summary_attendance_alarm_test_service_start_failed">系统于 %1$s 投递（%2$s），但短测试服务未能启动；未执行打卡</string>
     <string name="summary_attendance_alarm_test_error">无法安排测试。没有执行打卡，请检查系统设置后重试</string>
     <string name="attendance_alarm_test_delay_late">晚 %1$.1f 秒</string>
