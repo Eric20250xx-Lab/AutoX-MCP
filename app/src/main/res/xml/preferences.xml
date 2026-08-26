@@ -96,6 +96,12 @@
             android:layout="@layout/preference_custom"
             android:summary="@string/summary_script_guardian_background_status_waiting"
             android:title="@string/text_script_guardian_background_status" />
+
+        <Preference
+            android:key="@string/key_attendance_alarm_delivery_test"
+            android:layout="@layout/preference_custom"
+            android:summary="@string/summary_attendance_alarm_test_idle"
+            android:title="@string/text_attendance_alarm_delivery_test" />
     </PreferenceCategory>
 
     <PreferenceCategory

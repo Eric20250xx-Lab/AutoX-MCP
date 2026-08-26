@@ -215,6 +215,22 @@
     <string name="script_guardian_watchdog_suspect">主进程暂未响应，正在复查</string>
     <string name="script_guardian_watchdog_restoring">正在请求恢复主进程</string>
     <string name="script_guardian_watchdog_unresponsive">主进程仍未响应，已请求再次恢复</string>
+    <string name="text_attendance_alarm_delivery_test">测试一次 Exact Alarm 投递</string>
+    <string name="summary_attendance_alarm_test_idle">点击后安排约 2 分钟后的单次测试。仅验证系统投递，不会执行打卡</string>
+    <string name="summary_attendance_alarm_test_permission_required">需要“闹钟和提醒”权限。授权后再次点击；本测试不会执行打卡</string>
+    <string name="summary_attendance_alarm_test_scheduled">已安排在 %1$s；仅测试系统投递，不会执行打卡</string>
+    <string name="summary_attendance_alarm_test_overdue">计划时间 %1$s 已过，但尚未记录到 Alarm 投递；未执行打卡</string>
+    <string name="summary_attendance_alarm_test_received">系统于 %1$s 投递（%2$s），但尚未记录到短测试服务启动；未执行打卡</string>
+    <string name="summary_attendance_alarm_test_service_started">系统于 %1$s 投递（%2$s），短测试服务于 %3$s 启动；不会执行打卡</string>
+    <string name="summary_attendance_alarm_test_finished">系统于 %1$s 投递（%2$s），短测试服务于 %3$s 启动，并于 %4$s 退出；未执行打卡</string>
+    <string name="summary_attendance_alarm_test_service_start_failed">系统于 %1$s 投递（%2$s），但短测试服务未能启动；未执行打卡</string>
+    <string name="summary_attendance_alarm_test_error">无法安排测试。没有执行打卡，请检查系统设置后重试</string>
+    <string name="attendance_alarm_test_delay_late">晚 %1$.1f 秒</string>
+    <string name="attendance_alarm_test_delay_early">早 %1$.1f 秒</string>
+    <string name="attendance_alarm_test_channel_name">Exact Alarm 投递测试</string>
+    <string name="attendance_alarm_test_channel_description">显示一次由用户主动安排的系统闹钟投递测试</string>
+    <string name="attendance_alarm_test_notification_title">Exact Alarm 投递测试</string>
+    <string name="attendance_alarm_test_notification_text">系统测试已送达；不会执行打卡</string>
     <string name="text_layout_inspector_is_dumping">布局分析中</string>
     <string name="text_force_stop">强制停止</string>
     <string name="text_execution_finished" formatted="false">\n------------\n[%s]运行结束，用时%f秒</string>

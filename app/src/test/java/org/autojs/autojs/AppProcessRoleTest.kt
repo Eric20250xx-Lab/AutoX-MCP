@@ -21,6 +21,10 @@ class AppProcessRoleTest {
             AppProcessRole.resolve(packageName, "$packageName:guardian", ":script")
         )
         assertEquals(
+            AppProcessRole.ATTENDANCE_PROBE,
+            AppProcessRole.resolve(packageName, "$packageName:attendance_probe", ":script")
+        )
+        assertEquals(
             AppProcessRole.OTHER,
             AppProcessRole.resolve(packageName, "$packageName:other", ":script")
         )
