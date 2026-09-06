@@ -18,6 +18,10 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 
+internal fun shouldDeferForegroundServiceStart(sdkInt: Int, exceptionClassName: String): Boolean =
+    sdkInt >= Build.VERSION_CODES.S &&
+        exceptionClassName == "android.app.ForegroundServiceStartNotAllowedException"
+
 class McpServerService : Service(), SharedPreferences.OnSharedPreferenceChangeListener {
     private lateinit var prefs: SharedPreferences
     private lateinit var mcpService: McpService
@@ -140,6 +144,9 @@ class McpServerService : Service(), SharedPreferences.OnSharedPreferenceChangeLi
                 ContextCompat.startForegroundService(context, intent)
                 true
             } catch (error: RuntimeException) {
+                if (!shouldDeferForegroundServiceStart(Build.VERSION.SDK_INT, error.javaClass.name)) {
+                    throw error
+                }
                 Log.w(
                     TAG,
                     "Foreground service start was deferred until the app returns to foreground",
