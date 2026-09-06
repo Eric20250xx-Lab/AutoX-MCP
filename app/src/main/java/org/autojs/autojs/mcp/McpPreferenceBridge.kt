@@ -7,22 +7,27 @@ import android.content.SharedPreferences
 import android.os.Bundle
 import androidx.preference.PreferenceManager
 import org.autojs.autoxjs.mcp.McpPrefKeys
+import org.autojs.autoxjs.mcp.McpPrefs
 import org.autojs.autoxjs.mcp.McpServerService
 
-class McpPreferenceBridge(private val context: Context) :
+class McpPreferenceBridge(private val context: Context, private val applyInitialState: Boolean = true) :
     SharedPreferences.OnSharedPreferenceChangeListener,
     Application.ActivityLifecycleCallbacks {
     private val prefs = PreferenceManager.getDefaultSharedPreferences(context)
     private val application = context.applicationContext as? Application
     private val startController = McpServiceStartController(
         startService = { McpServerService.start(context) },
-        stopService = { McpServerService.stop(context) }
+        stopService = { McpServerService.stop(context) },
+        loadRetryPending = { McpPrefs.isStartRetryPending(context) },
+        saveRetryPending = { McpPrefs.setStartRetryPending(context, it) }
     )
 
     fun start() {
         prefs.registerOnSharedPreferenceChangeListener(this)
         application?.registerActivityLifecycleCallbacks(this)
-        applyState()
+        if (applyInitialState) {
+            applyState()
+        }
     }
 
     fun stop() {
@@ -38,13 +43,12 @@ class McpPreferenceBridge(private val context: Context) :
     }
 
     private fun applyState() {
-        val enabled = prefs.getBoolean(McpPrefKeys.KEY_ENABLED, false)
-        startController.apply(enabled)
+        startController.apply(McpPrefs.isEnabled(context))
     }
 
     override fun onActivityResumed(activity: Activity) {
         startController.onForeground(
-            enabled = prefs.getBoolean(McpPrefKeys.KEY_ENABLED, false)
+            enabled = McpPrefs.isEnabled(context)
         )
     }
 
@@ -58,22 +62,29 @@ class McpPreferenceBridge(private val context: Context) :
 
 internal class McpServiceStartController(
     private val startService: () -> Boolean,
-    private val stopService: () -> Unit
+    private val stopService: () -> Unit,
+    private val loadRetryPending: (() -> Boolean)? = null,
+    private val saveRetryPending: ((Boolean) -> Unit)? = null
 ) {
     private var retryPending = false
 
     fun apply(enabled: Boolean) {
         if (!enabled) {
-            retryPending = false
+            setRetryPending(false)
             stopService()
             return
         }
-        retryPending = !startService()
+        setRetryPending(!startService())
     }
 
     fun onForeground(enabled: Boolean) {
-        if (retryPending) {
+        if (loadRetryPending?.invoke() ?: retryPending) {
             apply(enabled)
         }
+    }
+
+    private fun setRetryPending(pending: Boolean) {
+        retryPending = pending
+        saveRetryPending?.invoke(pending)
     }
 }

@@ -93,6 +93,7 @@ class App : Application(), Configuration.Provider {
             )
         )
         if (processRole == AppProcessRole.SCRIPT) {
+            mcpPreferenceBridge = McpPreferenceBridge(this, applyInitialState = false).apply { start() }
             AutoJs.initInstance(this)
             ScriptGuardianExecutionGuard.install(this)
             if (Pref.isRunningVolumeControlEnabled()) {

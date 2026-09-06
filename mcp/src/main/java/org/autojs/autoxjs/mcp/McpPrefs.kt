@@ -5,6 +5,7 @@ import android.content.SharedPreferences
 import androidx.preference.PreferenceManager
 
 object McpPrefs {
+    private const val KEY_START_RETRY_PENDING = "mcp_foreground_start_retry_pending"
     private const val DEFAULT_HOST = "0.0.0.0"
     private const val LOCAL_HOST = "127.0.0.1"
     private const val DEFAULT_PORT = 27190
@@ -39,4 +40,11 @@ object McpPrefs {
             allowNetwork = allowNetwork
         )
     }
+
+    fun isEnabled(context: Context): Boolean = getSharedPreferences(context).getBoolean(McpPrefKeys.KEY_ENABLED, false)
+
+    fun isStartRetryPending(context: Context): Boolean = getSharedPreferences(context).getBoolean(KEY_START_RETRY_PENDING, false)
+
+    fun setStartRetryPending(context: Context, pending: Boolean): Boolean = getSharedPreferences(context)
+        .edit().putBoolean(KEY_START_RETRY_PENDING, pending).commit()
 }

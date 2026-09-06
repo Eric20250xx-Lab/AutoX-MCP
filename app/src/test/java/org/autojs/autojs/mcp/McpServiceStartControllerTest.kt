@@ -8,17 +8,26 @@ class McpServiceStartControllerTest {
     fun failedBackgroundStartIsRetriedWhenAppReturnsToForeground() {
         val startResults = ArrayDeque(listOf(false, true))
         var startCount = 0
-        val controller = McpServiceStartController(
+        var retryPending = false
+        val mainController = McpServiceStartController(
             startService = {
                 startCount += 1
                 startResults.removeFirst()
             },
-            stopService = {}
+            stopService = {},
+            loadRetryPending = { retryPending },
+            saveRetryPending = { retryPending = it }
+        )
+        val scriptController = McpServiceStartController(
+            startService = { startCount += 1; startResults.removeFirst() },
+            stopService = {},
+            loadRetryPending = { retryPending },
+            saveRetryPending = { retryPending = it }
         )
 
-        controller.apply(enabled = true)
-        controller.onForeground(enabled = true)
-        controller.onForeground(enabled = true)
+        mainController.apply(enabled = true)
+        scriptController.onForeground(enabled = true)
+        mainController.onForeground(enabled = true)
 
         assertEquals(2, startCount)
     }
