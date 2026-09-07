@@ -9,6 +9,7 @@ import android.content.Intent
 import android.content.SharedPreferences
 import android.os.Build
 import android.os.IBinder
+import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.CoroutineScope
@@ -16,6 +17,10 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
+
+internal fun shouldDeferForegroundServiceStart(sdkInt: Int, exceptionClassName: String): Boolean =
+    sdkInt >= Build.VERSION_CODES.S &&
+        exceptionClassName == "android.app.ForegroundServiceStartNotAllowedException"
 
 class McpServerService : Service(), SharedPreferences.OnSharedPreferenceChangeListener {
     private lateinit var prefs: SharedPreferences
@@ -121,6 +126,7 @@ class McpServerService : Service(), SharedPreferences.OnSharedPreferenceChangeLi
     }
 
     companion object {
+        private const val TAG = "McpServerService"
         private const val CHANNEL_ID = "mcp_server"
         private const val NOTIFICATION_ID = 27190
 
@@ -132,9 +138,22 @@ class McpServerService : Service(), SharedPreferences.OnSharedPreferenceChangeLi
             McpPrefKeys.KEY_ALLOW_NETWORK
         )
 
-        fun start(context: Context) {
+        fun start(context: Context): Boolean {
             val intent = Intent(context, McpServerService::class.java)
-            ContextCompat.startForegroundService(context, intent)
+            return try {
+                ContextCompat.startForegroundService(context, intent)
+                true
+            } catch (error: RuntimeException) {
+                if (!shouldDeferForegroundServiceStart(Build.VERSION.SDK_INT, error.javaClass.name)) {
+                    throw error
+                }
+                Log.w(
+                    TAG,
+                    "Foreground service start was deferred until the app returns to foreground",
+                    error
+                )
+                false
+            }
         }
 
         fun stop(context: Context) {
