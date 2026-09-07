@@ -147,7 +147,7 @@ class ScriptRuntimeV2(val builder: Builder) : ScriptRuntime(builder) {
         shizuku.recycle()
         termux.recycle()
         consoleExtension.close()
-        ObjectWatcher.default.watch(this, engines.myEngine().toString() + "::" + TAG)
+        ObjectWatcher.default.watch(this, (engines.myEngine()?.toString() ?: "detached") + "::" + TAG)
     }
 
     class Builder {
@@ -192,4 +192,3 @@ class ScriptRuntimeV2(val builder: Builder) : ScriptRuntime(builder) {
         }
     }
 }
-
