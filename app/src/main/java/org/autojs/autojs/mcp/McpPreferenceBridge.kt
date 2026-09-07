@@ -6,8 +6,8 @@ import android.content.Context
 import android.content.SharedPreferences
 import android.os.Bundle
 import androidx.preference.PreferenceManager
+import org.autojs.autojs.external.fileprovider.AppFileProvider
 import org.autojs.autoxjs.mcp.McpPrefKeys
-import org.autojs.autoxjs.mcp.McpPrefs
 import org.autojs.autoxjs.mcp.McpServerService
 
 class McpPreferenceBridge(private val context: Context, private val applyInitialState: Boolean = true) :
@@ -18,8 +18,8 @@ class McpPreferenceBridge(private val context: Context, private val applyInitial
     private val startController = McpServiceStartController(
         startService = { McpServerService.start(context) },
         stopService = { McpServerService.stop(context) },
-        loadRetryPending = { McpPrefs.isStartRetryPending(context) },
-        saveRetryPending = { McpPrefs.setStartRetryPending(context, it) }
+        loadRetryPending = { AppFileProvider.isMcpRetryPending(context) },
+        saveRetryPending = { AppFileProvider.setMcpRetryPending(context, it) }
     )
 
     fun start() {
@@ -43,12 +43,12 @@ class McpPreferenceBridge(private val context: Context, private val applyInitial
     }
 
     private fun applyState() {
-        startController.apply(McpPrefs.isEnabled(context))
+        startController.apply(prefs.getBoolean(McpPrefKeys.KEY_ENABLED, false))
     }
 
     override fun onActivityResumed(activity: Activity) {
         startController.onForeground(
-            enabled = McpPrefs.isEnabled(context)
+            enabled = !applyInitialState || prefs.getBoolean(McpPrefKeys.KEY_ENABLED, false)
         )
     }
 
